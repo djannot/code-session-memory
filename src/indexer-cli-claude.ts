@@ -14,6 +14,24 @@
 import { resolveDbPath, openDatabase, getSessionMeta } from "./database";
 import { indexNewMessages } from "./indexer";
 import { parseTranscript, deriveSessionTitle } from "./transcript-to-messages";
+import type { FullMessage } from "./types";
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * Returns true if the last meaningful message in the list is a tool result
+ * (user message with tool-invocation:result parts only). This indicates the
+ * JSONL was read before Claude Code finished writing the final assistant
+ * response — we should retry.
+ */
+function endsWithToolResult(messages: FullMessage[]): boolean {
+  if (messages.length === 0) return false;
+  const last = messages[messages.length - 1];
+  if (last.info.role !== "user") return false;
+  return last.parts.every(
+    (p) => p.type === "tool-invocation" && p.state === "result",
+  );
+}
 
 async function main() {
   // Read JSON payload from stdin
@@ -41,10 +59,18 @@ async function main() {
   const db = openDatabase({ dbPath });
 
   try {
-    // Parse the transcript
-    const messages = parseTranscript(transcriptPath);
-    if (messages.length === 0) {
-      return;
+    // Parse the transcript — retry if the JSONL ends on a tool result,
+    // which means Claude Code hasn't finished writing the final assistant
+    // response yet (race condition between hook firing and JSONL flush).
+    let messages = parseTranscript(transcriptPath);
+    if (messages.length === 0) return;
+
+    const MAX_RETRIES = 5;
+    const RETRY_DELAY_MS = 500;
+
+    for (let attempt = 0; attempt < MAX_RETRIES && endsWithToolResult(messages); attempt++) {
+      await sleep(RETRY_DELAY_MS);
+      messages = parseTranscript(transcriptPath);
     }
 
     // Build a session title from the first user message
