@@ -1,12 +1,12 @@
 {
   "name": "opencode-session-memory",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Automatically index OpenCode sessions into a sqlite-vec vector database for semantic search across your AI coding history",
   "type": "commonjs",
   "main": "dist/src/indexer.js",
   "types": "dist/src/indexer.d.ts",
   "bin": {
-    "opencode-session-memory": "./dist/src/cli.js"
+    "opencode-session-memory": "dist/src/cli.js"
   },
   "files": [
     "dist/",

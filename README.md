@@ -50,25 +50,9 @@ The `install` command:
 1. Creates `~/.local/share/opencode-memory/sessions.db` and initialises the schema
 2. Copies the plugin to `~/.config/opencode/plugins/opencode-session-memory.ts`
 3. Copies the skill to `~/.config/opencode/skills/opencode-session-memory.md`
-4. Prints the MCP server config snippet to add to your `opencode.json`
+4. Writes the MCP server entry into `~/.config/opencode/opencode.json` (creating it if needed, preserving existing config)
 
-### Configure MCP server
-
-After running `install`, add the MCP server to your `opencode.json` (global at `~/.config/opencode/opencode.json` or project-level):
-
-```json
-{
-  "$schema": "https://opencode.ai/config.json",
-  "mcp": {
-    "opencode-session-memory": {
-      "type": "local",
-      "command": ["node", "/path/to/dist/mcp/index.js"]
-    }
-  }
-}
-```
-
-The exact path is printed by `npx opencode-session-memory install`.
+Then **restart OpenCode** to activate the plugin and MCP server.
 
 ### Set your API key
 
@@ -77,8 +61,6 @@ export OPENAI_API_KEY=sk-...
 ```
 
 Add this to your shell profile (`.bashrc`, `.zshrc`, etc.) so it's always available.
-
-**Note:** Do not set `OPENAI_API_KEY` in the MCP server's `environment` config block — OpenCode inherits it from the shell automatically, and setting it there would override the real value with a literal string.
 
 ## Usage
 
@@ -98,6 +80,7 @@ opencode-session-memory status
   ✓  Plugin         ~/.config/opencode/plugins/opencode-session-memory.ts
   ✓  Skill          ~/.config/opencode/skills/opencode-session-memory.md
   ✓  MCP server     /path/to/dist/mcp/index.js
+  ✓  MCP config     ~/.config/opencode/opencode.json
 
   Indexed chunks:   1842
   Sessions tracked: 47

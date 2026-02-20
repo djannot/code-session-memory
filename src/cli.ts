@@ -95,6 +95,44 @@ function installPlugin(src: string, dst: string): void {
   fs.writeFileSync(dst, content, "utf8");
 }
 
+function getGlobalOpenCodeConfigPath(): string {
+  return path.join(getOpenCodeConfigDir(), "opencode.json");
+}
+
+/**
+ * Merges the opencode-session-memory MCP entry into the global opencode.json.
+ * Creates the file if it doesn't exist. Preserves all existing config.
+ */
+function installMcpConfig(mcpServerPath: string): { configPath: string; existed: boolean } {
+  const configPath = getGlobalOpenCodeConfigPath();
+  const existed = fs.existsSync(configPath);
+
+  let config: Record<string, unknown> = {
+    $schema: "https://opencode.ai/config.json",
+  };
+
+  if (existed) {
+    try {
+      config = JSON.parse(fs.readFileSync(configPath, "utf8"));
+    } catch {
+      throw new Error(`Could not parse existing ${configPath} — please check it is valid JSON.`);
+    }
+  }
+
+  // Deep-merge the MCP entry
+  if (!config.mcp || typeof config.mcp !== "object") {
+    config.mcp = {};
+  }
+  (config.mcp as Record<string, unknown>)["opencode-session-memory"] = {
+    type: "local",
+    command: ["node", mcpServerPath],
+  };
+
+  ensureDir(path.dirname(configPath));
+  fs.writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n", "utf8");
+  return { configPath, existed };
+}
+
 function checkMark(ok: boolean): string {
   return ok ? "✓" : "✗";
 }
@@ -161,27 +199,31 @@ function install(): void {
     process.exit(1);
   }
 
-  // 4. Print MCP config
+  // 4. Write MCP config into ~/.config/opencode/opencode.json
   const mcpPath = getMcpServerPath();
+  process.stdout.write("  Configuring MCP server... ");
+  let mcpConfigPath = "";
+  try {
+    const { configPath, existed } = installMcpConfig(mcpPath);
+    mcpConfigPath = configPath;
+    console.log(green("done") + dim(` (${existed ? "updated" : "created"} ${configPath})`));
+  } catch (err: unknown) {
+    console.log(red("failed"));
+    console.error(`  Error: ${err instanceof Error ? err.message : String(err)}`);
+    process.exit(1);
+  }
+
   console.log(`
 ${bold("Installation complete!")}
-
-${bold("Add the MCP server to your opencode config")} (~/.config/opencode/opencode.json):
-
-  ${dim('{')}
-    ${dim('"mcp":')} ${dim('{')}
-      ${dim('"opencode-session-memory":')} ${dim('{')}
-        ${dim('"type": "local",')}
-        ${dim(`"command": ["node", "${mcpPath}"]`)}
-      ${dim('}')}\n    ${dim('}')}\n  ${dim('}')}
 
 ${bold("Environment variables required:")}
   OPENAI_API_KEY            — required for embedding generation
   OPENCODE_MEMORY_DB_PATH   — optional, overrides default DB path
 
 ${bold("Default DB path:")} ${dbPath}
+${bold("MCP config:")}      ${mcpConfigPath}
 
-Sessions will be automatically indexed after each agent turn.
+Restart OpenCode to activate the plugin and MCP server.
 Run ${bold("npx opencode-session-memory status")} to verify installation.
 `);
 }
@@ -199,12 +241,25 @@ function status(): void {
   const skillExists = fs.existsSync(skillDst);
   const mcpExists = fs.existsSync(mcpPath);
 
+  // Check whether the MCP entry is present in the global opencode.json
+  const globalConfigPath = getGlobalOpenCodeConfigPath();
+  let mcpConfigured = false;
+  try {
+    const raw = fs.readFileSync(globalConfigPath, "utf8");
+    const cfg = JSON.parse(raw) as Record<string, unknown>;
+    mcpConfigured = !!(cfg.mcp && typeof cfg.mcp === "object" &&
+      "opencode-session-memory" in (cfg.mcp as object));
+  } catch {
+    // file missing or invalid JSON
+  }
+
   const ok = (v: boolean) => v ? green(checkMark(true)) : red(checkMark(false));
 
   console.log(`  ${ok(dbExists)}  Database       ${dim(dbPath)}`);
   console.log(`  ${ok(pluginExists)}  Plugin         ${dim(pluginDst)}`);
   console.log(`  ${ok(skillExists)}  Skill          ${dim(skillDst)}`);
   console.log(`  ${ok(mcpExists)}  MCP server     ${dim(mcpPath)}`);
+  console.log(`  ${ok(mcpConfigured)}  MCP config     ${dim(globalConfigPath)}`);
 
   if (dbExists) {
     try {
@@ -219,7 +274,7 @@ function status(): void {
     }
   }
 
-  const allOk = dbExists && pluginExists && skillExists && mcpExists;
+  const allOk = dbExists && pluginExists && skillExists && mcpExists && mcpConfigured;
   console.log(`\n  ${allOk ? green("All components installed.") : red("Some components missing — run \"npx opencode-session-memory install\".")}`);
   console.log();
 }
@@ -238,6 +293,27 @@ function uninstall(): void {
     } else {
       console.log(dim("not found"));
     }
+  }
+
+  // Remove MCP entry from global opencode.json
+  process.stdout.write("  Removing MCP config... ");
+  const globalConfigPath = getGlobalOpenCodeConfigPath();
+  try {
+    if (fs.existsSync(globalConfigPath)) {
+      const cfg = JSON.parse(fs.readFileSync(globalConfigPath, "utf8")) as Record<string, unknown>;
+      if (cfg.mcp && typeof cfg.mcp === "object" && "opencode-session-memory" in (cfg.mcp as object)) {
+        delete (cfg.mcp as Record<string, unknown>)["opencode-session-memory"];
+        fs.writeFileSync(globalConfigPath, JSON.stringify(cfg, null, 2) + "\n", "utf8");
+        console.log(green("done"));
+      } else {
+        console.log(dim("not found"));
+      }
+    } else {
+      console.log(dim("not found"));
+    }
+  } catch (err: unknown) {
+    console.log(red("failed"));
+    console.error(`  Error: ${err instanceof Error ? err.message : String(err)}`);
   }
 
   console.log(`
