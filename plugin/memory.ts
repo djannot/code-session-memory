@@ -29,7 +29,15 @@ const MemoryPlugin: Plugin = async ({ $, serverUrl }) => {
       if (!sessionId) return;
 
       try {
-        await $`node ${INDEXER_CLI} ${sessionId} ${serverUrl.toString()}`.quiet();
+        const result = await $`node ${INDEXER_CLI} ${sessionId} ${serverUrl.toString()}`
+          .quiet()
+          .nothrow();
+        if (result.exitCode !== 0) {
+          const stderr = result.stderr.toString().trim();
+          console.error(
+            `[opencode-memory] Failed to index session ${sessionId}: exit code ${result.exitCode}${stderr ? `: ${stderr}` : ""}`,
+          );
+        }
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : String(err);
         console.error(`[opencode-memory] Failed to index session ${sessionId}: ${msg}`);

@@ -235,6 +235,7 @@ code-session-memory/
 │   ├── transcript-to-messages.ts          # Claude Code JSONL transcript parser
 │   ├── cursor-to-messages.ts             # Cursor state.vscdb reader (metadata + title)
 │   ├── cursor-transcript-to-messages.ts  # Cursor JSONL transcript parser → FullMessage[]
+│   ├── opencode-db-to-messages.ts        # OpenCode internal DB reader (fallback for -s mode)
 │   ├── indexer.ts                        # Orchestrator: incremental indexing
 │   ├── indexer-cli.ts                    # Node.js subprocess (called by OpenCode plugin)
 │   ├── indexer-cli-claude.ts             # Node.js subprocess (called by Claude Code hook)
@@ -259,6 +260,7 @@ code-session-memory/
     ├── session-to-md.test.ts
     ├── cursor-to-messages.test.ts           # Unit tests: Cursor SQLite reader
     ├── cursor-transcript-to-messages.test.ts # Unit tests: Cursor JSONL parser
+    ├── opencode-db-to-messages.test.ts      # Unit tests: OpenCode internal DB reader
     ├── e2e-claude.test.ts                   # End-to-end: Claude Code pipeline
     ├── e2e-opencode.test.ts                 # End-to-end: OpenCode pipeline
     ├── e2e-cursor.test.ts                   # End-to-end: Cursor pipeline
@@ -303,10 +305,11 @@ Tests use [Vitest](https://vitest.dev) and run without any external dependencies
  ✓ tests/indexer.test.ts                           (9 tests)
  ✓ tests/cursor-to-messages.test.ts               (15 tests)
  ✓ tests/cursor-transcript-to-messages.test.ts     (7 tests)
+ ✓ tests/opencode-db-to-messages.test.ts           (8 tests)
  ✓ tests/e2e-claude.test.ts                       (18 tests)
  ✓ tests/e2e-cursor.test.ts                        (8 tests)
  ✓ tests/e2e-opencode.test.ts                     (14 tests)
-   Tests  157 passed
+   Tests  165 passed
 ```
 
 To refresh the e2e fixtures (e.g. after changing the indexer or parsers), run:
