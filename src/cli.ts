@@ -208,13 +208,13 @@ function installClaudeHook(indexerCliClaudePath: string): { settingsPath: string
     hooks.Stop = [];
   }
 
-  // Add our hook
+  // Add our hook (synchronous — must NOT be async so the JSONL is fully
+  // written by Claude Code before we read it)
   hooks.Stop.push({
     hooks: [
       {
         type: "command",
         command: `node ${indexerCliClaudePath}`,
-        async: true,
       },
     ],
   });
