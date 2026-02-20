@@ -42,10 +42,16 @@ interface TranscriptUserLine {
   sourceToolAssistantUUID?: string;
 }
 
+interface TranscriptToolResultContentBlock {
+  type: "text";
+  text: string;
+}
+
 interface TranscriptToolResult {
   type: "tool_result";
   tool_use_id: string;
-  content: string;
+  // Claude Code sends either a plain string or an array of content blocks
+  content: string | TranscriptToolResultContentBlock[];
   is_error: boolean;
 }
 
@@ -108,7 +114,18 @@ function convertUserMessage(line: TranscriptUserLine): FullMessage | null {
     // Tool results
     for (const block of content) {
       if (block.type === "tool_result") {
-        const resultText = typeof block.content === "string" ? block.content : "";
+        // content may be a plain string or an array of { type: "text", text } blocks
+        let resultText: string;
+        if (typeof block.content === "string") {
+          resultText = block.content;
+        } else if (Array.isArray(block.content)) {
+          resultText = block.content
+            .filter((b) => b.type === "text")
+            .map((b) => b.text)
+            .join("\n");
+        } else {
+          resultText = "";
+        }
         parts.push({
           type: "tool-invocation",
           toolName: "tool_result",
@@ -188,9 +205,15 @@ export function parseTranscript(transcriptPath: string): FullMessage[] {
   const raw = fs.readFileSync(transcriptPath, "utf8");
   const lines = raw.split("\n").filter((l) => l.trim());
 
-  // First pass: collect all lines, deduplicate assistant messages by message.id
-  // (streaming sends partial chunks — we want only the final complete message)
+  // First pass: collect all lines, deduplicate assistant messages by message.id.
+  // Claude Code emits multiple entries per assistant message (streaming chunks,
+  // thinking-only vs final). We want:
+  //   - orderedEntries: one slot per logical message (keyed by first-seen uuid
+  //     for users, first-seen message.id for assistants)
+  //   - assistantByMsgId: always updated to the LAST entry (most complete content)
   const assistantByMsgId = new Map<string, TranscriptAssistantLine>();
+  // For assistants, track which message.id has already been slotted in orderedEntries
+  const seenAssistantMsgIds = new Set<string>();
   const orderedEntries: Array<{ uuid: string; line: TranscriptLine }> = [];
   const seenUuids = new Set<string>();
 
@@ -210,8 +233,10 @@ export function parseTranscript(transcriptPath: string): FullMessage[] {
       if (msgId) {
         // Always overwrite — last chunk wins (most complete content)
         assistantByMsgId.set(msgId, al);
-        // Track insertion order by uuid (first occurrence)
-        if (!seenUuids.has(al.uuid)) {
+        // Only add ONE slot per message.id (use the first-seen uuid as the
+        // stable cursor id for incremental indexing)
+        if (!seenAssistantMsgIds.has(msgId)) {
+          seenAssistantMsgIds.add(msgId);
           seenUuids.add(al.uuid);
           orderedEntries.push({ uuid: al.uuid, line });
         }
@@ -240,22 +265,33 @@ export function parseTranscript(transcriptPath: string): FullMessage[] {
     if (Array.isArray(ul.message.content)) {
       for (const block of ul.message.content as TranscriptToolResult[]) {
         if (block.type === "tool_result") {
-          toolResults.set(block.tool_use_id, block.content ?? "");
+          let text: string;
+          if (typeof block.content === "string") {
+            text = block.content ?? "";
+          } else if (Array.isArray(block.content)) {
+            text = block.content.filter((b) => b.type === "text").map((b) => b.text).join("\n");
+          } else {
+            text = "";
+          }
+          toolResults.set(block.tool_use_id, text);
         }
       }
     }
   }
 
-  for (const { line } of orderedEntries) {
+  for (const { uuid: slotUuid, line } of orderedEntries) {
     if (line.type === "assistant") {
       const al = line as TranscriptAssistantLine;
       const msgId = al.message?.id;
-      // Use the final (deduplicated) version
+      // Use the final (deduplicated) version for content, but preserve the
+      // first-seen uuid as the stable info.id for incremental indexing cursors.
       const finalLine = msgId ? (assistantByMsgId.get(msgId) ?? al) : al;
 
       // Enrich tool_use blocks with their results
       const enriched: TranscriptAssistantLine = {
         ...finalLine,
+        // Override uuid with the stable slot uuid so info.id stays consistent
+        uuid: slotUuid,
         message: {
           ...finalLine.message,
           content: finalLine.message.content.map((block) => {

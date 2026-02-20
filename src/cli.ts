@@ -3,15 +3,18 @@
  * code-session-memory CLI
  *
  * Usage:
- *   npx code-session-memory install   — install for OpenCode + Claude Code
- *   npx code-session-memory status    — show installation status
- *   npx code-session-memory uninstall — remove all installed components
+ *   npx code-session-memory install        — install for OpenCode + Claude Code
+ *   npx code-session-memory status         — show installation status
+ *   npx code-session-memory uninstall      — remove all installed components
+ *   npx code-session-memory reset-db       — wipe the database (with confirmation)
+ *   npx code-session-memory sessions       — browse / print / delete sessions
  */
 
 import fs from "fs";
 import path from "path";
 import os from "os";
 import { resolveDbPath, openDatabase } from "./database";
+import { cmdSessions } from "./cli-sessions";
 
 // ---------------------------------------------------------------------------
 // Paths — OpenCode
@@ -588,15 +591,72 @@ function uninstall(): void {
 `);
 }
 
+function resetDb(): void {
+  console.log(bold("\ncode-session-memory reset-db\n"));
+
+  const dbPath = resolveDbPath();
+
+  if (!fs.existsSync(dbPath)) {
+    console.log(`  ${dim("Database not found:")} ${dbPath}`);
+    console.log(`  Nothing to reset.\n`);
+    return;
+  }
+
+  // Show current stats before asking
+  try {
+    const db = openDatabase({ dbPath });
+    const chunks = (db.prepare("SELECT COUNT(*) as n FROM vec_items").get() as { n: number }).n;
+    const sessions = (db.prepare("SELECT COUNT(*) as n FROM sessions_meta").get() as { n: number }).n;
+    db.close();
+    console.log(`  Database: ${dim(dbPath)}`);
+    console.log(`  Indexed chunks:   ${chunks}`);
+    console.log(`  Sessions tracked: ${sessions}\n`);
+  } catch {
+    console.log(`  Database: ${dim(dbPath)}\n`);
+  }
+
+  // Prompt for confirmation
+  process.stdout.write(`  ${red("This will permanently delete all indexed data.")} Confirm? [y/N] `);
+
+  const response = (() => {
+    try {
+      // Read a single line synchronously from stdin
+      const buf = Buffer.alloc(64);
+      const n = fs.readSync(0, buf, 0, buf.length, null);
+      return buf.slice(0, n).toString("utf8").trim().toLowerCase();
+    } catch {
+      return "";
+    }
+  })();
+
+  if (response !== "y" && response !== "yes") {
+    console.log(`\n  ${dim("Aborted — database was not modified.")}\n`);
+    return;
+  }
+
+  fs.unlinkSync(dbPath);
+
+  // Re-initialise an empty DB
+  const db = openDatabase({ dbPath });
+  db.close();
+
+  console.log(`\n  ${green("Done.")} Database reset — all indexed data removed.\n`);
+}
+
 function help(): void {
   console.log(`
 ${bold("code-session-memory")} — Shared vector memory for OpenCode and Claude Code sessions
 
 ${bold("Usage:")}
-  npx code-session-memory install    Install all components (OpenCode + Claude Code)
-  npx code-session-memory status     Show installation status and DB stats
-  npx code-session-memory uninstall  Remove all installed components (keeps DB)
-  npx code-session-memory help       Show this help
+  npx code-session-memory install              Install all components (OpenCode + Claude Code)
+  npx code-session-memory status               Show installation status and DB stats
+  npx code-session-memory uninstall            Remove all installed components (keeps DB)
+  npx code-session-memory reset-db             Delete all indexed data (keeps installation)
+  npx code-session-memory sessions             Browse sessions interactively
+  npx code-session-memory sessions --filter    Browse with source/date filter step
+  npx code-session-memory sessions print <id>  Print all chunks of a session to stdout
+  npx code-session-memory sessions delete <id> Delete a session from the DB
+  npx code-session-memory help                 Show this help
 
 ${bold("Environment variables:")}
   OPENAI_API_KEY            Required for embedding generation
@@ -616,6 +676,13 @@ switch (cmd) {
   case "install":   install();   break;
   case "status":    status();    break;
   case "uninstall": uninstall(); break;
+  case "reset-db":  resetDb();   break;
+  case "sessions":
+    cmdSessions(process.argv.slice(3)).catch((err) => {
+      console.error(err instanceof Error ? err.message : String(err));
+      process.exit(1);
+    });
+    break;
   case "help":
   case "--help":
   case "-h":        help();      break;

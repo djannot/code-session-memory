@@ -307,3 +307,95 @@ export function listSessionUrls(db: Database, sessionId: string): string[] {
     .all(sessionId) as Array<{ url: string }>;
   return rows.map((r) => r.url);
 }
+
+// ---------------------------------------------------------------------------
+// Session browser helpers
+// ---------------------------------------------------------------------------
+
+export interface SessionRow extends SessionMeta {
+  chunk_count: number;
+}
+
+export interface SessionFilter {
+  source?: SessionSource;
+  fromDate?: number; // unix timestamp (seconds)
+  toDate?: number;   // unix timestamp (seconds)
+}
+
+/**
+ * Returns all sessions from sessions_meta enriched with their chunk count,
+ * ordered by updated_at DESC.
+ */
+export function listSessions(db: Database, filter: SessionFilter = {}): SessionRow[] {
+  let sql = `
+    SELECT
+      m.session_id,
+      m.session_title,
+      m.project,
+      m.source,
+      m.last_indexed_message_id,
+      m.updated_at,
+      COUNT(v.chunk_id) AS chunk_count
+    FROM sessions_meta m
+    LEFT JOIN vec_items v ON v.session_id = m.session_id
+    WHERE 1=1
+  `;
+  const params: unknown[] = [];
+
+  if (filter.source) {
+    sql += " AND m.source = ?";
+    params.push(filter.source);
+  }
+  if (typeof filter.fromDate === "number") {
+    sql += " AND m.updated_at >= ?";
+    params.push(filter.fromDate);
+  }
+  if (typeof filter.toDate === "number") {
+    sql += " AND m.updated_at <= ?";
+    params.push(filter.toDate);
+  }
+
+  sql += " GROUP BY m.session_id ORDER BY m.updated_at DESC";
+
+  return db.prepare(sql).all(...params) as SessionRow[];
+}
+
+export interface ChunkRow {
+  chunk_id: string;
+  chunk_index: number;
+  total_chunks: number;
+  section: string;
+  heading_hierarchy: string; // JSON-encoded string[]
+  content: string;
+  url: string;
+}
+
+/**
+ * Returns all chunks for a session ordered by chunk_index ASC.
+ */
+export function getSessionChunksOrdered(db: Database, sessionId: string): ChunkRow[] {
+  return db.prepare(`
+    SELECT chunk_id, chunk_index, total_chunks, section, heading_hierarchy, content, url
+    FROM vec_items
+    WHERE session_id = ?
+    ORDER BY chunk_index ASC
+  `).all(sessionId) as ChunkRow[];
+}
+
+/**
+ * Deletes a session's chunks and metadata inside a single transaction.
+ * Returns the number of chunks deleted.
+ */
+export function deleteSession(db: Database, sessionId: string): number {
+  const deleteChunks = db.prepare("DELETE FROM vec_items WHERE session_id = ?");
+  const deleteMeta   = db.prepare("DELETE FROM sessions_meta WHERE session_id = ?");
+
+  let chunkCount = 0;
+  db.transaction(() => {
+    const result = deleteChunks.run(sessionId);
+    chunkCount = result.changes;
+    deleteMeta.run(sessionId);
+  })();
+
+  return chunkCount;
+}

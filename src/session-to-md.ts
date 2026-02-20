@@ -1,4 +1,4 @@
-import type { SessionInfo, FullMessage, MessagePart } from "./types";
+import type { SessionInfo, FullMessage, MessagePart, ToolState } from "./types";
 
 // ---------------------------------------------------------------------------
 // Part renderers
@@ -48,6 +48,43 @@ function renderFilePart(part: MessagePart): string {
   return "";
 }
 
+function renderOpenCodeToolPart(part: MessagePart): string {
+  const lines: string[] = [];
+  const name = part.tool ?? "unknown";
+  const state = part.state as ToolState | undefined;
+
+  lines.push(`**Tool: ${name}**`);
+  lines.push("");
+
+  if (state?.input !== undefined) {
+    lines.push("**Input:**");
+    lines.push("```json");
+    lines.push(JSON.stringify(state.input, null, 2));
+    lines.push("```");
+    lines.push("");
+  }
+
+  if (state?.output !== undefined) {
+    const output = state.output;
+    const outputStr =
+      typeof output === "string" ? output : JSON.stringify(output, null, 2);
+    lines.push("**Output:**");
+    if (typeof output === "string" && !output.startsWith("```")) {
+      lines.push("```");
+      lines.push(outputStr);
+      lines.push("```");
+    } else {
+      lines.push(outputStr);
+    }
+    lines.push("");
+  } else if (state?.error) {
+    lines.push(`**Error:** ${state.error}`);
+    lines.push("");
+  }
+
+  return lines.join("\n");
+}
+
 function renderPart(part: MessagePart): string {
   switch (part.type) {
     case "text":
@@ -55,6 +92,10 @@ function renderPart(part: MessagePart): string {
 
     case "tool-invocation":
       return renderToolPart(part);
+
+    // OpenCode tool parts use type="tool" with a different shape
+    case "tool":
+      return renderOpenCodeToolPart(part);
 
     case "file":
       return renderFilePart(part);

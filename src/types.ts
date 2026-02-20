@@ -57,15 +57,29 @@ export interface MessageInfo {
 export interface MessagePart {
   type: string;
   text?: string;
-  // tool invocation fields
+  // tool invocation fields (Claude Code: type="tool-invocation")
   toolName?: string;
   toolCallId?: string;
-  state?: string;
+  state?: string | ToolState;
   args?: unknown;
   result?: unknown;
   // file fields
   filename?: string;
   mediaType?: string;
+  // OpenCode tool part fields (type="tool")
+  callID?: string;
+  tool?: string;
+}
+
+/**
+ * OpenCode tool part state — shape returned by the OpenCode REST API.
+ */
+export interface ToolState {
+  status: "pending" | "running" | "complete" | "error";
+  input?: unknown;
+  output?: unknown;
+  error?: string;
+  title?: string;
 }
 
 export interface FullMessage {

@@ -1,0 +1,318 @@
+{
+  "info": {
+    "id": "ses_384ea51edffej2KCSEX2eqF77s",
+    "slug": "crisp-meadow",
+    "projectID": "4c200afcd64e2e14eb1388df831bdb7eca3bd749",
+    "directory": "/Users/denisjannot/Documents/ai/opencode-memory",
+    "title": "List TypeScript files in src directory",
+    "version": "1.2.10",
+    "summary": {
+      "additions": 0,
+      "deletions": 0,
+      "files": 0
+    },
+    "permission": [
+      {
+        "permission": "question",
+        "pattern": "*",
+        "action": "deny"
+      },
+      {
+        "permission": "plan_enter",
+        "pattern": "*",
+        "action": "deny"
+      },
+      {
+        "permission": "plan_exit",
+        "pattern": "*",
+        "action": "deny"
+      }
+    ],
+    "time": {
+      "created": 1771591544338,
+      "updated": 1771591551836
+    }
+  },
+  "messages": [
+    {
+      "info": {
+        "role": "user",
+        "time": {
+          "created": 1771591544367
+        },
+        "summary": {
+          "diffs": []
+        },
+        "agent": "build",
+        "model": {
+          "providerID": "google-vertex-anthropic",
+          "modelID": "claude-sonnet-4-6@default"
+        },
+        "id": "msg_c7b15ae2f001fnZxKQnqLEIL4L",
+        "sessionID": "ses_384ea51edffej2KCSEX2eqF77s"
+      },
+      "parts": [
+        {
+          "type": "text",
+          "text": "\"List TypeScript files in the src directory using the Glob tool. Use pattern src/**/*.ts\"\n",
+          "id": "prt_c7b15ae30001t3v2Txfa6Z5wHX",
+          "sessionID": "ses_384ea51edffej2KCSEX2eqF77s",
+          "messageID": "msg_c7b15ae2f001fnZxKQnqLEIL4L"
+        }
+      ]
+    },
+    {
+      "info": {
+        "role": "assistant",
+        "time": {
+          "created": 1771591544372,
+          "completed": 1771591546765
+        },
+        "parentID": "msg_c7b15ae2f001fnZxKQnqLEIL4L",
+        "modelID": "claude-sonnet-4-6@default",
+        "providerID": "google-vertex-anthropic",
+        "mode": "build",
+        "agent": "build",
+        "path": {
+          "cwd": "/Users/denisjannot/Documents/ai/opencode-memory",
+          "root": "/Users/denisjannot/Documents/ai/opencode-memory"
+        },
+        "cost": 0.04653225,
+        "tokens": {
+          "total": 12244,
+          "input": 2,
+          "output": 55,
+          "reasoning": 0,
+          "cache": {
+            "read": 0,
+            "write": 12187
+          }
+        },
+        "finish": "tool-calls",
+        "id": "msg_c7b15ae34001j5uPTQz0Egxh3a",
+        "sessionID": "ses_384ea51edffej2KCSEX2eqF77s"
+      },
+      "parts": [
+        {
+          "type": "step-start",
+          "snapshot": "d44dba016087be430f05213069815dd3efcc1b99",
+          "id": "prt_c7b15b748001RvaImFAs3cwQnw",
+          "sessionID": "ses_384ea51edffej2KCSEX2eqF77s",
+          "messageID": "msg_c7b15ae34001j5uPTQz0Egxh3a"
+        },
+        {
+          "type": "tool",
+          "callID": "toolu_vrtx_01CqLa9MFHsdgrh7AN6sRxUW",
+          "tool": "glob",
+          "state": {
+            "status": "completed",
+            "input": {
+              "pattern": "src/**/*.ts"
+            },
+            "output": "/Users/denisjannot/Documents/ai/opencode-memory/src/session-to-md.ts\n/Users/denisjannot/Documents/ai/opencode-memory/src/types.ts\n/Users/denisjannot/Documents/ai/opencode-memory/src/transcript-to-messages.ts\n/Users/denisjannot/Documents/ai/opencode-memory/src/cli-sessions.ts\n/Users/denisjannot/Documents/ai/opencode-memory/src/cli.ts\n/Users/denisjannot/Documents/ai/opencode-memory/src/database.ts\n/Users/denisjannot/Documents/ai/opencode-memory/src/indexer-cli-claude.ts\n/Users/denisjannot/Documents/ai/opencode-memory/src/indexer-cli.ts\n/Users/denisjannot/Documents/ai/opencode-memory/src/indexer.ts\n/Users/denisjannot/Documents/ai/opencode-memory/src/chunker.ts\n/Users/denisjannot/Documents/ai/opencode-memory/src/embedder.ts",
+            "title": "",
+            "metadata": {
+              "count": 11,
+              "truncated": false
+            },
+            "time": {
+              "start": 1771591546698,
+              "end": 1771591546698
+            }
+          },
+          "id": "prt_c7b15b749001swglZgnkkWfKfW",
+          "sessionID": "ses_384ea51edffej2KCSEX2eqF77s",
+          "messageID": "msg_c7b15ae34001j5uPTQz0Egxh3a"
+        },
+        {
+          "type": "step-finish",
+          "reason": "tool-calls",
+          "snapshot": "d44dba016087be430f05213069815dd3efcc1b99",
+          "cost": 0.04653225,
+          "tokens": {
+            "total": 12244,
+            "input": 2,
+            "output": 55,
+            "reasoning": 0,
+            "cache": {
+              "read": 0,
+              "write": 12187
+            }
+          },
+          "id": "prt_c7b15b74c001hijMhj2bx1YS90",
+          "sessionID": "ses_384ea51edffej2KCSEX2eqF77s",
+          "messageID": "msg_c7b15ae34001j5uPTQz0Egxh3a"
+        }
+      ]
+    },
+    {
+      "info": {
+        "role": "assistant",
+        "time": {
+          "created": 1771591546766,
+          "completed": 1771591550222
+        },
+        "parentID": "msg_c7b15ae2f001fnZxKQnqLEIL4L",
+        "modelID": "claude-sonnet-4-6@default",
+        "providerID": "google-vertex-anthropic",
+        "mode": "build",
+        "agent": "build",
+        "path": {
+          "cwd": "/Users/denisjannot/Documents/ai/opencode-memory",
+          "root": "/Users/denisjannot/Documents/ai/opencode-memory"
+        },
+        "cost": 0.00815535,
+        "tokens": {
+          "total": 12751,
+          "input": 1,
+          "output": 212,
+          "reasoning": 0,
+          "cache": {
+            "read": 12187,
+            "write": 351
+          }
+        },
+        "finish": "stop",
+        "id": "msg_c7b15b78e001p7sFGbh99a7jhs",
+        "sessionID": "ses_384ea51edffej2KCSEX2eqF77s"
+      },
+      "parts": [
+        {
+          "type": "step-start",
+          "snapshot": "d44dba016087be430f05213069815dd3efcc1b99",
+          "id": "prt_c7b15bc520014GAwEZRfLWgnj4",
+          "sessionID": "ses_384ea51edffej2KCSEX2eqF77s",
+          "messageID": "msg_c7b15b78e001p7sFGbh99a7jhs"
+        },
+        {
+          "type": "text",
+          "text": "Here are the TypeScript files found in `src/`:\n\n| File | Description |\n|------|-------------|\n| `src/session-to-md.ts` | Session to Markdown conversion |\n| `src/types.ts` | Type definitions |\n| `src/transcript-to-messages.ts` | Transcript to messages conversion |\n| `src/cli-sessions.ts` | CLI session handling |\n| `src/cli.ts` | CLI entry point |\n| `src/database.ts` | Database logic |\n| `src/indexer-cli-claude.ts` | Claude Code CLI indexer |\n| `src/indexer-cli.ts` | CLI indexer |\n| `src/indexer.ts` | Core indexer |\n| `src/chunker.ts` | Message chunking |\n| `src/embedder.ts` | Embedding logic |\n\n11 files total.",
+          "time": {
+            "start": 1771591550126,
+            "end": 1771591550126
+          },
+          "id": "prt_c7b15bc52002qN2nYmopWz0Ko1",
+          "sessionID": "ses_384ea51edffej2KCSEX2eqF77s",
+          "messageID": "msg_c7b15b78e001p7sFGbh99a7jhs"
+        },
+        {
+          "type": "step-finish",
+          "reason": "stop",
+          "snapshot": "d44dba016087be430f05213069815dd3efcc1b99",
+          "cost": 0.00815535,
+          "tokens": {
+            "total": 12751,
+            "input": 1,
+            "output": 212,
+            "reasoning": 0,
+            "cache": {
+              "read": 12187,
+              "write": 351
+            }
+          },
+          "id": "prt_c7b15c4b7001HshHphFQ8qAa2G",
+          "sessionID": "ses_384ea51edffej2KCSEX2eqF77s",
+          "messageID": "msg_c7b15b78e001p7sFGbh99a7jhs"
+        }
+      ]
+    },
+    {
+      "info": {
+        "role": "user",
+        "time": {
+          "created": 1771591551650
+        },
+        "summary": {
+          "diffs": []
+        },
+        "agent": "build",
+        "model": {
+          "providerID": "google-vertex-anthropic",
+          "modelID": "claude-sonnet-4-6@default"
+        },
+        "id": "msg_c7b15caa2001fw5qDhawn76r73",
+        "sessionID": "ses_384ea51edffej2KCSEX2eqF77s"
+      },
+      "parts": [
+        {
+          "type": "text",
+          "text": "\"How many TypeScript files are in the src directory?\"\n",
+          "id": "prt_c7b15caa3001BN15pz14vXhlWx",
+          "sessionID": "ses_384ea51edffej2KCSEX2eqF77s",
+          "messageID": "msg_c7b15caa2001fw5qDhawn76r73"
+        }
+      ]
+    },
+    {
+      "info": {
+        "role": "assistant",
+        "time": {
+          "created": 1771591551671,
+          "completed": 1771591553862
+        },
+        "parentID": "msg_c7b15caa2001fw5qDhawn76r73",
+        "modelID": "claude-sonnet-4-6@default",
+        "providerID": "google-vertex-anthropic",
+        "mode": "build",
+        "agent": "build",
+        "path": {
+          "cwd": "/Users/denisjannot/Documents/ai/opencode-memory",
+          "root": "/Users/denisjannot/Documents/ai/opencode-memory"
+        },
+        "cost": 0.0050799,
+        "tokens": {
+          "total": 12797,
+          "input": 2,
+          "output": 31,
+          "reasoning": 0,
+          "cache": {
+            "read": 12538,
+            "write": 226
+          }
+        },
+        "finish": "stop",
+        "id": "msg_c7b15cab7001lRvyVnfAajZ0Ar",
+        "sessionID": "ses_384ea51edffej2KCSEX2eqF77s"
+      },
+      "parts": [
+        {
+          "type": "step-start",
+          "snapshot": "f8e2b552104f41841307409d1da8d55de2daa804",
+          "id": "prt_c7b15d199001iC9xP7sc9RpoK1",
+          "sessionID": "ses_384ea51edffej2KCSEX2eqF77s",
+          "messageID": "msg_c7b15cab7001lRvyVnfAajZ0Ar"
+        },
+        {
+          "type": "text",
+          "text": "Based on the Glob results from the previous query, there are **11 TypeScript files** in the `src/` directory.",
+          "time": {
+            "start": 1771591553758,
+            "end": 1771591553758
+          },
+          "id": "prt_c7b15d19a001vXAs3V2m6rPktg",
+          "sessionID": "ses_384ea51edffej2KCSEX2eqF77s",
+          "messageID": "msg_c7b15cab7001lRvyVnfAajZ0Ar"
+        },
+        {
+          "type": "step-finish",
+          "reason": "stop",
+          "snapshot": "f8e2b552104f41841307409d1da8d55de2daa804",
+          "cost": 0.0050799,
+          "tokens": {
+            "total": 12797,
+            "input": 2,
+            "output": 31,
+            "reasoning": 0,
+            "cache": {
+              "read": 12538,
+              "write": 226
+            }
+          },
+          "id": "prt_c7b15d2ee001BjS3eh1EZx9QXg",
+          "sessionID": "ses_384ea51edffej2KCSEX2eqF77s",
+          "messageID": "msg_c7b15cab7001lRvyVnfAajZ0Ar"
+        }
+      ]
+    }
+  ]
+}
