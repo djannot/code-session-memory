@@ -74,7 +74,7 @@ describe("resolveDbPath", () => {
   it("returns default path when no overrides", () => {
     delete process.env.OPENCODE_MEMORY_DB_PATH;
     const result = resolveDbPath();
-    expect(result).toContain("opencode-memory");
+    expect(result).toContain("code-session-memory");
     expect(result).toContain("sessions.db");
   });
 });
@@ -124,6 +124,7 @@ describe("getSessionMeta / upsertSessionMeta", () => {
       session_id: "ses_001",
       session_title: "My Session",
       project: "/home/user/proj",
+      source: "opencode",
       last_indexed_message_id: "msg_005",
       updated_at: 1700000000000,
     };
@@ -138,6 +139,7 @@ describe("getSessionMeta / upsertSessionMeta", () => {
       session_id: "ses_001",
       session_title: "Old Title",
       project: "/old",
+      source: "opencode",
       last_indexed_message_id: "msg_001",
       updated_at: 1000,
     };
@@ -162,6 +164,7 @@ describe("getSessionMeta / upsertSessionMeta", () => {
       session_id: "ses_002",
       session_title: "Session",
       project: "/proj",
+      source: "opencode",
       last_indexed_message_id: null,
       updated_at: 0,
     };

@@ -171,6 +171,7 @@ describe("createToolHandlers", () => {
         expect.any(Array),
         expect.any(Number),
         "/my/project",
+        undefined,
       );
     });
 

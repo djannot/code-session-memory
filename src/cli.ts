@@ -1,11 +1,11 @@
 #!/usr/bin/env node
 /**
- * opencode-session-memory CLI
+ * code-session-memory CLI
  *
  * Usage:
- *   npx opencode-session-memory install   — install plugin, skill and initialise DB
- *   npx opencode-session-memory status    — show installation status
- *   npx opencode-session-memory uninstall — remove plugin and skill files
+ *   npx code-session-memory install   — install for OpenCode + Claude Code
+ *   npx code-session-memory status    — show installation status
+ *   npx code-session-memory uninstall — remove all installed components
  */
 
 import fs from "fs";
@@ -14,33 +14,49 @@ import os from "os";
 import { resolveDbPath, openDatabase } from "./database";
 
 // ---------------------------------------------------------------------------
-// Paths
+// Paths — OpenCode
 // ---------------------------------------------------------------------------
 
 function getOpenCodeConfigDir(): string {
-  // Respect OPENCODE_CONFIG_DIR if set
   const envDir = process.env.OPENCODE_CONFIG_DIR;
   if (envDir) return envDir;
   return path.join(os.homedir(), ".config", "opencode");
 }
 
-function getPluginDir(): string {
-  return path.join(getOpenCodeConfigDir(), "plugins");
+function getOpenCodePluginDst(): string {
+  return path.join(getOpenCodeConfigDir(), "plugins", "code-session-memory.ts");
 }
 
-function getSkillDir(): string {
-  return path.join(getOpenCodeConfigDir(), "skills");
+function getOpenCodeSkillDst(): string {
+  return path.join(getOpenCodeConfigDir(), "skills", "code-session-memory.md");
 }
 
-function getPluginDst(): string {
-  return path.join(getPluginDir(), "opencode-session-memory.ts");
+function getGlobalOpenCodeConfigPath(): string {
+  return path.join(getOpenCodeConfigDir(), "opencode.json");
 }
 
-function getSkillDst(): string {
-  return path.join(getSkillDir(), "opencode-session-memory.md");
+// ---------------------------------------------------------------------------
+// Paths — Claude Code
+// ---------------------------------------------------------------------------
+
+function getClaudeConfigDir(): string {
+  const envDir = process.env.CLAUDE_CONFIG_DIR;
+  if (envDir) return envDir;
+  return path.join(os.homedir(), ".claude");
 }
 
-// The installed package location
+function getClaudeSettingsPath(): string {
+  return path.join(getClaudeConfigDir(), "settings.json");
+}
+
+function getClaudeMdPath(): string {
+  return path.join(getClaudeConfigDir(), "CLAUDE.md");
+}
+
+// ---------------------------------------------------------------------------
+// Paths — package
+// ---------------------------------------------------------------------------
+
 function getPackageRoot(): string {
   // __dirname is dist/src/ after build, so go two levels up
   return path.resolve(__dirname, "..", "..");
@@ -56,6 +72,14 @@ function getSkillSrc(): string {
 
 function getMcpServerPath(): string {
   return path.join(getPackageRoot(), "dist", "mcp", "index.js");
+}
+
+function getIndexerCliPath(): string {
+  return path.join(getPackageRoot(), "dist", "src", "indexer-cli.js");
+}
+
+function getIndexerCliClaudePath(): string {
+  return path.join(getPackageRoot(), "dist", "src", "indexer-cli-claude.js");
 }
 
 // ---------------------------------------------------------------------------
@@ -75,42 +99,30 @@ function copyFile(src: string, dst: string): void {
 }
 
 /**
- * Copies the plugin template, replacing the OPENCODE_MEMORY_INDEXER_PATH
- * placeholder with the absolute path to the compiled indexer-cli.js so it
- * resolves correctly when Bun executes the plugin from
- * ~/.config/opencode/plugins/.
+ * Copies the OpenCode plugin template, replacing the OPENCODE_MEMORY_INDEXER_PATH
+ * placeholder with the absolute path to indexer-cli.js.
  */
-function installPlugin(src: string, dst: string): void {
+function installOpenCodePlugin(src: string, dst: string): void {
   if (!fs.existsSync(src)) {
     throw new Error(`Plugin source not found: ${src}\nDid you run "npm run build" first?`);
   }
-  const indexerCliPath = path.join(getPackageRoot(), "dist", "src", "indexer-cli.js");
   let content = fs.readFileSync(src, "utf8");
-  // Replace the placeholder string literal with the absolute path to the indexer CLI
   content = content.replace(
     '"OPENCODE_MEMORY_INDEXER_PATH"',
-    JSON.stringify(indexerCliPath),
+    JSON.stringify(getIndexerCliPath()),
   );
   ensureDir(path.dirname(dst));
   fs.writeFileSync(dst, content, "utf8");
 }
 
-function getGlobalOpenCodeConfigPath(): string {
-  return path.join(getOpenCodeConfigDir(), "opencode.json");
-}
-
 /**
- * Merges the opencode-session-memory MCP entry into the global opencode.json.
- * Creates the file if it doesn't exist. Preserves all existing config.
+ * Merges the code-session-memory MCP entry into the global opencode.json.
  */
-function installMcpConfig(mcpServerPath: string): { configPath: string; existed: boolean } {
+function installOpenCodeMcpConfig(mcpServerPath: string): { configPath: string; existed: boolean } {
   const configPath = getGlobalOpenCodeConfigPath();
   const existed = fs.existsSync(configPath);
 
-  let config: Record<string, unknown> = {
-    $schema: "https://opencode.ai/config.json",
-  };
-
+  let config: Record<string, unknown> = { $schema: "https://opencode.ai/config.json" };
   if (existed) {
     try {
       config = JSON.parse(fs.readFileSync(configPath, "utf8"));
@@ -119,11 +131,8 @@ function installMcpConfig(mcpServerPath: string): { configPath: string; existed:
     }
   }
 
-  // Deep-merge the MCP entry
-  if (!config.mcp || typeof config.mcp !== "object") {
-    config.mcp = {};
-  }
-  (config.mcp as Record<string, unknown>)["opencode-session-memory"] = {
+  if (!config.mcp || typeof config.mcp !== "object") config.mcp = {};
+  (config.mcp as Record<string, unknown>)["code-session-memory"] = {
     type: "local",
     command: ["node", mcpServerPath],
   };
@@ -133,24 +142,209 @@ function installMcpConfig(mcpServerPath: string): { configPath: string; existed:
   return { configPath, existed };
 }
 
-function checkMark(ok: boolean): string {
-  return ok ? "✓" : "✗";
+/**
+ * Removes the code-session-memory MCP entry from opencode.json.
+ */
+function uninstallOpenCodeMcpConfig(): "done" | "not_found" {
+  const configPath = getGlobalOpenCodeConfigPath();
+  if (!fs.existsSync(configPath)) return "not_found";
+  try {
+    const cfg = JSON.parse(fs.readFileSync(configPath, "utf8")) as Record<string, unknown>;
+    if (cfg.mcp && typeof cfg.mcp === "object" && "code-session-memory" in (cfg.mcp as object)) {
+      delete (cfg.mcp as Record<string, unknown>)["code-session-memory"];
+      fs.writeFileSync(configPath, JSON.stringify(cfg, null, 2) + "\n", "utf8");
+      return "done";
+    }
+    return "not_found";
+  } catch {
+    return "not_found";
+  }
 }
 
-function bold(s: string): string {
-  return `\x1b[1m${s}\x1b[0m`;
+/**
+ * Installs/updates the Claude Code Stop hook in ~/.claude/settings.json.
+ */
+function installClaudeHook(indexerCliClaudePath: string): { settingsPath: string; existed: boolean } {
+  const settingsPath = getClaudeSettingsPath();
+  const existed = fs.existsSync(settingsPath);
+
+  let settings: Record<string, unknown> = {};
+  if (existed) {
+    try {
+      settings = JSON.parse(fs.readFileSync(settingsPath, "utf8"));
+    } catch {
+      throw new Error(`Could not parse existing ${settingsPath} — please check it is valid JSON.`);
+    }
+  }
+
+  if (!settings.hooks || typeof settings.hooks !== "object") settings.hooks = {};
+  const hooks = settings.hooks as Record<string, unknown[]>;
+
+  // Remove any existing code-session-memory Stop hook
+  if (Array.isArray(hooks.Stop)) {
+    hooks.Stop = hooks.Stop.filter((group: unknown) => {
+      if (!group || typeof group !== "object") return true;
+      const g = group as Record<string, unknown>;
+      if (!Array.isArray(g.hooks)) return true;
+      return !g.hooks.some((h: unknown) => {
+        const handler = h as Record<string, unknown>;
+        return typeof handler.command === "string" &&
+          handler.command.includes("indexer-cli-claude");
+      });
+    });
+  } else {
+    hooks.Stop = [];
+  }
+
+  // Add our hook
+  hooks.Stop.push({
+    hooks: [
+      {
+        type: "command",
+        command: `node ${indexerCliClaudePath}`,
+        async: true,
+      },
+    ],
+  });
+
+  ensureDir(path.dirname(settingsPath));
+  fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + "\n", "utf8");
+  return { settingsPath, existed };
 }
 
-function green(s: string): string {
-  return `\x1b[32m${s}\x1b[0m`;
+/**
+ * Removes the code-session-memory Stop hook from ~/.claude/settings.json.
+ */
+function uninstallClaudeHook(): "done" | "not_found" {
+  const settingsPath = getClaudeSettingsPath();
+  if (!fs.existsSync(settingsPath)) return "not_found";
+  try {
+    const settings = JSON.parse(fs.readFileSync(settingsPath, "utf8")) as Record<string, unknown>;
+    const hooks = settings.hooks as Record<string, unknown[]> | undefined;
+    if (!hooks || !Array.isArray(hooks.Stop)) return "not_found";
+
+    const before = hooks.Stop.length;
+    hooks.Stop = hooks.Stop.filter((group: unknown) => {
+      if (!group || typeof group !== "object") return true;
+      const g = group as Record<string, unknown>;
+      if (!Array.isArray(g.hooks)) return true;
+      return !g.hooks.some((h: unknown) => {
+        const handler = h as Record<string, unknown>;
+        return typeof handler.command === "string" &&
+          handler.command.includes("indexer-cli-claude");
+      });
+    });
+
+    if (hooks.Stop.length === before) return "not_found";
+    fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + "\n", "utf8");
+    return "done";
+  } catch {
+    return "not_found";
+  }
 }
 
-function red(s: string): string {
-  return `\x1b[31m${s}\x1b[0m`;
+/**
+ * Appends the memory skill context to ~/.claude/CLAUDE.md.
+ */
+function installClaudeMd(skillSrc: string): { mdPath: string; existed: boolean } {
+  const mdPath = getClaudeMdPath();
+  const existed = fs.existsSync(mdPath);
+  const marker = "<!-- code-session-memory -->";
+
+  const skillContent = fs.existsSync(skillSrc)
+    ? fs.readFileSync(skillSrc, "utf8")
+    : "";
+
+  if (existed) {
+    const current = fs.readFileSync(mdPath, "utf8");
+    // Replace existing block if present
+    if (current.includes(marker)) {
+      const updated = current.replace(
+        new RegExp(`${marker}[\\s\\S]*?${marker}`, "g"),
+        `${marker}\n${skillContent}\n${marker}`,
+      );
+      fs.writeFileSync(mdPath, updated, "utf8");
+      return { mdPath, existed };
+    }
+    // Append
+    fs.writeFileSync(mdPath, current + `\n\n${marker}\n${skillContent}\n${marker}\n`, "utf8");
+  } else {
+    ensureDir(path.dirname(mdPath));
+    fs.writeFileSync(mdPath, `${marker}\n${skillContent}\n${marker}\n`, "utf8");
+  }
+  return { mdPath, existed };
 }
 
-function dim(s: string): string {
-  return `\x1b[2m${s}\x1b[0m`;
+/**
+ * Removes the code-session-memory block from CLAUDE.md.
+ */
+function uninstallClaudeMd(): "done" | "not_found" {
+  const mdPath = getClaudeMdPath();
+  if (!fs.existsSync(mdPath)) return "not_found";
+  const marker = "<!-- code-session-memory -->";
+  const content = fs.readFileSync(mdPath, "utf8");
+  if (!content.includes(marker)) return "not_found";
+  const updated = content
+    .replace(new RegExp(`\\n?\\n?${marker}[\\s\\S]*?${marker}\\n?`, "g"), "")
+    .trimEnd();
+  fs.writeFileSync(mdPath, updated ? updated + "\n" : "", "utf8");
+  return "done";
+}
+
+function checkMcpConfigured(): boolean {
+  const configPath = getGlobalOpenCodeConfigPath();
+  try {
+    const raw = fs.readFileSync(configPath, "utf8");
+    const cfg = JSON.parse(raw) as Record<string, unknown>;
+    return !!(cfg.mcp && typeof cfg.mcp === "object" && "code-session-memory" in (cfg.mcp as object));
+  } catch { return false; }
+}
+
+function checkClaudeHookInstalled(): boolean {
+  const settingsPath = getClaudeSettingsPath();
+  try {
+    const settings = JSON.parse(fs.readFileSync(settingsPath, "utf8")) as Record<string, unknown>;
+    const hooks = settings.hooks as Record<string, unknown[]> | undefined;
+    if (!hooks || !Array.isArray(hooks.Stop)) return false;
+    return hooks.Stop.some((group: unknown) => {
+      if (!group || typeof group !== "object") return false;
+      const g = group as Record<string, unknown>;
+      if (!Array.isArray(g.hooks)) return false;
+      return g.hooks.some((h: unknown) => {
+        const handler = h as Record<string, unknown>;
+        return typeof handler.command === "string" &&
+          handler.command.includes("indexer-cli-claude");
+      });
+    });
+  } catch { return false; }
+}
+
+function checkClaudeMdInstalled(): boolean {
+  const mdPath = getClaudeMdPath();
+  if (!fs.existsSync(mdPath)) return false;
+  return fs.readFileSync(mdPath, "utf8").includes("<!-- code-session-memory -->");
+}
+
+// ---------------------------------------------------------------------------
+// Formatting helpers
+// ---------------------------------------------------------------------------
+
+function bold(s: string): string { return `\x1b[1m${s}\x1b[0m`; }
+function green(s: string): string { return `\x1b[32m${s}\x1b[0m`; }
+function red(s: string): string { return `\x1b[31m${s}\x1b[0m`; }
+function dim(s: string): string { return `\x1b[2m${s}\x1b[0m`; }
+function ok(v: boolean): string { return v ? green("✓") : red("✗"); }
+
+function step(label: string, fn: () => string): void {
+  process.stdout.write(`  ${label}... `);
+  try {
+    const result = fn();
+    console.log(green("done") + (result ? dim(` (${result})`) : ""));
+  } catch (err: unknown) {
+    console.log(red("failed"));
+    console.error(`  Error: ${err instanceof Error ? err.message : String(err)}`);
+    process.exit(1);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -158,162 +352,148 @@ function dim(s: string): string {
 // ---------------------------------------------------------------------------
 
 function install(): void {
-  console.log(bold("\nopencode-session-memory install\n"));
+  console.log(bold("\ncode-session-memory install\n"));
 
   const dbPath = resolveDbPath();
-  const pluginDst = getPluginDst();
-  const skillDst = getSkillDst();
+  const mcpPath = getMcpServerPath();
+  const indexerClaudePath = getIndexerCliClaudePath();
 
-  // 1. Initialise the database
-  process.stdout.write("  Initialising database... ");
-  try {
+  // 1. DB
+  step("Initialising database", () => {
     ensureDir(path.dirname(dbPath));
     const db = openDatabase({ dbPath });
     db.close();
-    console.log(green("done") + dim(` (${dbPath})`));
-  } catch (err: unknown) {
-    console.log(red("failed"));
-    console.error(`  Error: ${err instanceof Error ? err.message : String(err)}`);
-    process.exit(1);
-  }
+    return dbPath;
+  });
 
-  // 2. Install plugin
-  process.stdout.write("  Installing plugin... ");
-  try {
-    installPlugin(getPluginSrc(), pluginDst);
-    console.log(green("done") + dim(` (${pluginDst})`));
-  } catch (err: unknown) {
-    console.log(red("failed"));
-    console.error(`  Error: ${err instanceof Error ? err.message : String(err)}`);
-    process.exit(1);
-  }
+  // 2. OpenCode plugin
+  step("Installing OpenCode plugin", () => {
+    const dst = getOpenCodePluginDst();
+    installOpenCodePlugin(getPluginSrc(), dst);
+    return dst;
+  });
 
-  // 3. Install skill
-  process.stdout.write("  Installing skill... ");
-  try {
-    copyFile(getSkillSrc(), skillDst);
-    console.log(green("done") + dim(` (${skillDst})`));
-  } catch (err: unknown) {
-    console.log(red("failed"));
-    console.error(`  Error: ${err instanceof Error ? err.message : String(err)}`);
-    process.exit(1);
-  }
+  // 3. OpenCode skill
+  step("Installing OpenCode skill", () => {
+    const dst = getOpenCodeSkillDst();
+    copyFile(getSkillSrc(), dst);
+    return dst;
+  });
 
-  // 4. Write MCP config into ~/.config/opencode/opencode.json
-  const mcpPath = getMcpServerPath();
-  process.stdout.write("  Configuring MCP server... ");
-  let mcpConfigPath = "";
-  try {
-    const { configPath, existed } = installMcpConfig(mcpPath);
-    mcpConfigPath = configPath;
-    console.log(green("done") + dim(` (${existed ? "updated" : "created"} ${configPath})`));
-  } catch (err: unknown) {
-    console.log(red("failed"));
-    console.error(`  Error: ${err instanceof Error ? err.message : String(err)}`);
-    process.exit(1);
-  }
+  // 4. OpenCode MCP config
+  step("Configuring OpenCode MCP server", () => {
+    const { configPath, existed } = installOpenCodeMcpConfig(mcpPath);
+    return `${existed ? "updated" : "created"} ${configPath}`;
+  });
+
+  // 5. Claude Code hook
+  step("Installing Claude Code Stop hook", () => {
+    const { settingsPath, existed } = installClaudeHook(indexerClaudePath);
+    return `${existed ? "updated" : "created"} ${settingsPath}`;
+  });
+
+  // 6. Claude Code CLAUDE.md
+  step("Installing Claude Code context (CLAUDE.md)", () => {
+    const { mdPath, existed } = installClaudeMd(getSkillSrc());
+    return `${existed ? "updated" : "created"} ${mdPath}`;
+  });
 
   console.log(`
 ${bold("Installation complete!")}
 
-${bold("Environment variables required:")}
-  OPENAI_API_KEY            — required for embedding generation
-  OPENCODE_MEMORY_DB_PATH   — optional, overrides default DB path
+${bold("Required environment variable:")}
+  OPENAI_API_KEY  — for embedding generation
 
 ${bold("Default DB path:")} ${dbPath}
-${bold("MCP config:")}      ${mcpConfigPath}
 
-Restart OpenCode to activate the plugin and MCP server.
-Run ${bold("npx opencode-session-memory status")} to verify installation.
+Restart ${bold("OpenCode")} and ${bold("Claude Code")} to activate.
+Run ${bold("npx code-session-memory status")} to verify.
 `);
 }
 
 function status(): void {
-  console.log(bold("\nopencode-session-memory status\n"));
+  console.log(bold("\ncode-session-memory status\n"));
 
   const dbPath = resolveDbPath();
-  const pluginDst = getPluginDst();
-  const skillDst = getSkillDst();
   const mcpPath = getMcpServerPath();
 
-  const dbExists = fs.existsSync(dbPath);
-  const pluginExists = fs.existsSync(pluginDst);
-  const skillExists = fs.existsSync(skillDst);
-  const mcpExists = fs.existsSync(mcpPath);
+  console.log(bold("  OpenCode"));
+  console.log(`  ${ok(fs.existsSync(getOpenCodePluginDst()))}  Plugin      ${dim(getOpenCodePluginDst())}`);
+  console.log(`  ${ok(fs.existsSync(getOpenCodeSkillDst()))}  Skill       ${dim(getOpenCodeSkillDst())}`);
+  console.log(`  ${ok(checkMcpConfigured())}  MCP config  ${dim(getGlobalOpenCodeConfigPath())}`);
 
-  // Check whether the MCP entry is present in the global opencode.json
-  const globalConfigPath = getGlobalOpenCodeConfigPath();
-  let mcpConfigured = false;
-  try {
-    const raw = fs.readFileSync(globalConfigPath, "utf8");
-    const cfg = JSON.parse(raw) as Record<string, unknown>;
-    mcpConfigured = !!(cfg.mcp && typeof cfg.mcp === "object" &&
-      "opencode-session-memory" in (cfg.mcp as object));
-  } catch {
-    // file missing or invalid JSON
-  }
+  console.log(bold("\n  Claude Code"));
+  console.log(`  ${ok(checkClaudeHookInstalled())}  Stop hook   ${dim(getClaudeSettingsPath())}`);
+  console.log(`  ${ok(checkClaudeMdInstalled())}  CLAUDE.md   ${dim(getClaudeMdPath())}`);
 
-  const ok = (v: boolean) => v ? green(checkMark(true)) : red(checkMark(false));
+  console.log(bold("\n  Shared"));
+  console.log(`  ${ok(fs.existsSync(mcpPath))}  MCP server  ${dim(mcpPath)}`);
+  console.log(`  ${ok(fs.existsSync(dbPath))}  Database    ${dim(dbPath)}`);
 
-  console.log(`  ${ok(dbExists)}  Database       ${dim(dbPath)}`);
-  console.log(`  ${ok(pluginExists)}  Plugin         ${dim(pluginDst)}`);
-  console.log(`  ${ok(skillExists)}  Skill          ${dim(skillDst)}`);
-  console.log(`  ${ok(mcpExists)}  MCP server     ${dim(mcpPath)}`);
-  console.log(`  ${ok(mcpConfigured)}  MCP config     ${dim(globalConfigPath)}`);
-
-  if (dbExists) {
+  if (fs.existsSync(dbPath)) {
     try {
       const db = openDatabase({ dbPath });
-      const countRow = db.prepare("SELECT COUNT(*) as n FROM vec_items").get() as { n: number };
-      const sessRow = db.prepare("SELECT COUNT(*) as n FROM sessions_meta").get() as { n: number };
+      const chunks = (db.prepare("SELECT COUNT(*) as n FROM vec_items").get() as { n: number }).n;
+      const sessions = (db.prepare("SELECT COUNT(*) as n FROM sessions_meta").get() as { n: number }).n;
+      const bySource = db.prepare(
+        "SELECT source, COUNT(*) as n FROM sessions_meta GROUP BY source"
+      ).all() as Array<{ source: string; n: number }>;
       db.close();
-      console.log(`\n  ${dim("Indexed chunks:  ")}${countRow.n}`);
-      console.log(`  ${dim("Sessions tracked:")} ${sessRow.n}`);
-    } catch {
-      // DB might be empty/uninitialised
-    }
+      console.log(`\n  ${dim("Indexed chunks:   ")}${chunks}`);
+      console.log(`  ${dim("Sessions tracked: ")}${sessions}`);
+      for (const row of bySource) {
+        console.log(`    ${dim(`${row.source}:`)} ${row.n}`);
+      }
+    } catch { /* DB might be empty */ }
   }
 
-  const allOk = dbExists && pluginExists && skillExists && mcpExists && mcpConfigured;
-  console.log(`\n  ${allOk ? green("All components installed.") : red("Some components missing — run \"npx opencode-session-memory install\".")}`);
-  console.log();
+  const allOk = fs.existsSync(getOpenCodePluginDst()) &&
+    fs.existsSync(getOpenCodeSkillDst()) &&
+    checkMcpConfigured() &&
+    checkClaudeHookInstalled() &&
+    checkClaudeMdInstalled() &&
+    fs.existsSync(mcpPath) &&
+    fs.existsSync(dbPath);
+
+  console.log(`\n  ${allOk
+    ? green("All components installed.")
+    : red("Some components missing — run \"npx code-session-memory install\".")
+  }\n`);
 }
 
 function uninstall(): void {
-  console.log(bold("\nopencode-session-memory uninstall\n"));
+  console.log(bold("\ncode-session-memory uninstall\n"));
 
-  const pluginDst = getPluginDst();
-  const skillDst = getSkillDst();
+  const items: Array<[string, () => void]> = [
+    ["OpenCode plugin", () => {
+      const p = getOpenCodePluginDst();
+      if (fs.existsSync(p)) fs.unlinkSync(p);
+      else throw new Error("not found");
+    }],
+    ["OpenCode skill", () => {
+      const p = getOpenCodeSkillDst();
+      if (fs.existsSync(p)) fs.unlinkSync(p);
+      else throw new Error("not found");
+    }],
+    ["OpenCode MCP config", () => {
+      if (uninstallOpenCodeMcpConfig() === "not_found") throw new Error("not found");
+    }],
+    ["Claude Code hook", () => {
+      if (uninstallClaudeHook() === "not_found") throw new Error("not found");
+    }],
+    ["Claude Code CLAUDE.md", () => {
+      if (uninstallClaudeMd() === "not_found") throw new Error("not found");
+    }],
+  ];
 
-  for (const [label, filePath] of [["Plugin", pluginDst], ["Skill", skillDst]] as const) {
+  for (const [label, fn] of items) {
     process.stdout.write(`  Removing ${label}... `);
-    if (fs.existsSync(filePath)) {
-      fs.unlinkSync(filePath);
+    try {
+      fn();
       console.log(green("done"));
-    } else {
+    } catch {
       console.log(dim("not found"));
     }
-  }
-
-  // Remove MCP entry from global opencode.json
-  process.stdout.write("  Removing MCP config... ");
-  const globalConfigPath = getGlobalOpenCodeConfigPath();
-  try {
-    if (fs.existsSync(globalConfigPath)) {
-      const cfg = JSON.parse(fs.readFileSync(globalConfigPath, "utf8")) as Record<string, unknown>;
-      if (cfg.mcp && typeof cfg.mcp === "object" && "opencode-session-memory" in (cfg.mcp as object)) {
-        delete (cfg.mcp as Record<string, unknown>)["opencode-session-memory"];
-        fs.writeFileSync(globalConfigPath, JSON.stringify(cfg, null, 2) + "\n", "utf8");
-        console.log(green("done"));
-      } else {
-        console.log(dim("not found"));
-      }
-    } else {
-      console.log(dim("not found"));
-    }
-  } catch (err: unknown) {
-    console.log(red("failed"));
-    console.error(`  Error: ${err instanceof Error ? err.message : String(err)}`);
   }
 
   console.log(`
@@ -324,18 +504,19 @@ function uninstall(): void {
 
 function help(): void {
   console.log(`
-${bold("opencode-session-memory")} — Vector memory for OpenCode sessions
+${bold("code-session-memory")} — Shared vector memory for OpenCode and Claude Code sessions
 
 ${bold("Usage:")}
-  npx opencode-session-memory install    Install plugin, skill and initialise the DB
-  npx opencode-session-memory status     Show installation status and DB stats
-  npx opencode-session-memory uninstall  Remove plugin and skill files (keeps DB)
-  npx opencode-session-memory help       Show this help
+  npx code-session-memory install    Install all components (OpenCode + Claude Code)
+  npx code-session-memory status     Show installation status and DB stats
+  npx code-session-memory uninstall  Remove all installed components (keeps DB)
+  npx code-session-memory help       Show this help
 
 ${bold("Environment variables:")}
   OPENAI_API_KEY            Required for embedding generation
   OPENCODE_MEMORY_DB_PATH   Override the default DB path
   OPENCODE_CONFIG_DIR       Override the OpenCode config directory
+  CLAUDE_CONFIG_DIR         Override the Claude Code config directory
 `);
 }
 
@@ -346,20 +527,12 @@ ${bold("Environment variables:")}
 const cmd = process.argv[2] ?? "help";
 
 switch (cmd) {
-  case "install":
-    install();
-    break;
-  case "status":
-    status();
-    break;
-  case "uninstall":
-    uninstall();
-    break;
+  case "install":   install();   break;
+  case "status":    status();    break;
+  case "uninstall": uninstall(); break;
   case "help":
   case "--help":
-  case "-h":
-    help();
-    break;
+  case "-h":        help();      break;
   default:
     console.error(`Unknown command: ${cmd}`);
     help();

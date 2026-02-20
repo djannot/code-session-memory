@@ -1,7 +1,7 @@
 import path from "path";
 import os from "os";
 import fs from "fs";
-import type { DocumentChunk, SessionMeta, DatabaseConfig, QueryResult } from "./types";
+import type { DocumentChunk, SessionMeta, SessionSource, DatabaseConfig, QueryResult } from "./types";
 
 const DEFAULT_EMBEDDING_DIMENSION = 3072;
 
@@ -23,7 +23,7 @@ export function resolveDbPath(overridePath?: string): string {
   if (envPath) {
     return envPath.replace(/^~/, os.homedir());
   }
-  return path.join(os.homedir(), ".local", "share", "opencode-memory", "sessions.db");
+  return path.join(os.homedir(), ".local", "share", "code-session-memory", "sessions.db");
 }
 
 // ---------------------------------------------------------------------------
@@ -111,10 +111,18 @@ export function initSchema(db: Database, embeddingDimension = DEFAULT_EMBEDDING_
       session_id              TEXT PRIMARY KEY,
       session_title           TEXT NOT NULL DEFAULT '',
       project                 TEXT NOT NULL DEFAULT '',
+      source                  TEXT NOT NULL DEFAULT 'opencode',
       last_indexed_message_id TEXT,
       updated_at              INTEGER NOT NULL DEFAULT 0
     );
   `);
+
+  // Migrate existing DBs: add source column if missing
+  try {
+    db.exec(`ALTER TABLE sessions_meta ADD COLUMN source TEXT NOT NULL DEFAULT 'opencode'`);
+  } catch {
+    // Column already exists — ignore
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -130,17 +138,19 @@ export function getSessionMeta(db: Database, sessionId: string): SessionMeta | n
 
 export function upsertSessionMeta(db: Database, meta: SessionMeta): void {
   db.prepare(`
-    INSERT INTO sessions_meta (session_id, session_title, project, last_indexed_message_id, updated_at)
-    VALUES (?, ?, ?, ?, ?)
+    INSERT INTO sessions_meta (session_id, session_title, project, source, last_indexed_message_id, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?)
     ON CONFLICT(session_id) DO UPDATE SET
       session_title           = excluded.session_title,
       project                 = excluded.project,
+      source                  = excluded.source,
       last_indexed_message_id = excluded.last_indexed_message_id,
       updated_at              = excluded.updated_at
   `).run(
     meta.session_id,
     meta.session_title,
     meta.project,
+    meta.source,
     meta.last_indexed_message_id,
     meta.updated_at,
   );
@@ -219,24 +229,39 @@ export function queryByEmbedding(
   queryEmbedding: number[],
   topK = 10,
   projectFilter?: string,
+  sourceFilter?: SessionSource,
 ): QueryResult[] {
+  // sqlite-vec requires the LIMIT (k) constraint to be part of the KNN WHERE
+  // clause. We use a CTE to perform the KNN first, then join sessions_meta for
+  // the source column and apply optional post-filters.
   let sql = `
-    SELECT
-      chunk_id, content, url, section, heading_hierarchy,
-      chunk_index, total_chunks, session_id, session_title, project,
-      distance
-    FROM vec_items
-    WHERE embedding MATCH ?
+    WITH knn AS (
+      SELECT
+        chunk_id, content, url, section, heading_hierarchy,
+        chunk_index, total_chunks, session_id, session_title, project,
+        distance
+      FROM vec_items
+      WHERE embedding MATCH ?
+        AND k = ?
+    )
+    SELECT knn.*, m.source
+    FROM knn
+    LEFT JOIN sessions_meta m ON knn.session_id = m.session_id
+    WHERE 1=1
   `;
-  const params: unknown[] = [new Float32Array(queryEmbedding)];
+  const params: unknown[] = [new Float32Array(queryEmbedding), topK];
 
   if (projectFilter) {
-    sql += " AND project = ?";
+    sql += " AND knn.project = ?";
     params.push(projectFilter);
   }
 
-  sql += " ORDER BY distance LIMIT ?";
-  params.push(topK);
+  if (sourceFilter) {
+    sql += " AND m.source = ?";
+    params.push(sourceFilter);
+  }
+
+  sql += " ORDER BY distance";
 
   const rows = db.prepare(sql).all(...params) as QueryResult[];
   // Strip raw embedding bytes from results

@@ -18,12 +18,18 @@ export interface DocumentChunk {
 }
 
 /**
+ * Which tool produced a session.
+ */
+export type SessionSource = "opencode" | "claude-code";
+
+/**
  * A row in the sessions_meta table — tracks per-session indexing progress.
  */
 export interface SessionMeta {
   session_id: string;
   session_title: string;
   project: string;
+  source: SessionSource;
   last_indexed_message_id: string | null;
   updated_at: number;
 }
@@ -79,6 +85,7 @@ export interface QueryResult {
   heading_hierarchy?: string;
   chunk_index?: number;
   total_chunks?: number;
+  source?: SessionSource;
 }
 
 /**

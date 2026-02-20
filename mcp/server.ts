@@ -45,7 +45,7 @@ export function createSqliteProvider(deps: {
    */
   function withDb<T>(fn: (db: SqliteDatabase) => T): T {
     if (!fs.existsSync(dbPath)) {
-      throw new Error(`Database not found at ${dbPath}. Run "opencode-memory install" first.`);
+      throw new Error(`Database not found at ${dbPath}. Run "code-session-memory install" first.`);
     }
     const db = new Database(dbPath);
     sqliteVec.load(db);
@@ -62,25 +62,37 @@ export function createSqliteProvider(deps: {
     queryEmbedding: number[],
     topK = 10,
     projectFilter?: string,
+    sourceFilter?: string,
   ): Promise<QueryResult[]> {
     return withDb((db) => {
       let sql = `
-        SELECT
-          chunk_id, content, url, section, heading_hierarchy,
-          chunk_index, total_chunks, session_id, session_title, project,
-          distance
-        FROM vec_items
-        WHERE embedding MATCH ?
+        WITH knn AS (
+          SELECT
+            chunk_id, content, url, section, heading_hierarchy,
+            chunk_index, total_chunks, session_id, session_title, project,
+            distance
+          FROM vec_items
+          WHERE embedding MATCH ?
+            AND k = ?
+        )
+        SELECT knn.*, m.source
+        FROM knn
+        LEFT JOIN sessions_meta m ON knn.session_id = m.session_id
+        WHERE 1=1
       `;
-      const params: unknown[] = [new Float32Array(queryEmbedding)];
+      const params: unknown[] = [new Float32Array(queryEmbedding), topK];
 
       if (projectFilter) {
-        sql += " AND project = ?";
+        sql += " AND knn.project = ?";
         params.push(projectFilter);
       }
 
-      sql += " ORDER BY distance LIMIT ?";
-      params.push(topK);
+      if (sourceFilter) {
+        sql += " AND m.source = ?";
+        params.push(sourceFilter);
+      }
+
+      sql += " ORDER BY distance";
 
       const rows = db.prepare(sql).all(...params) as QueryResult[];
       rows.forEach((r) => {
@@ -132,6 +144,7 @@ export function createToolHandlers(deps: {
     embedding: number[],
     topK: number,
     project?: string,
+    source?: string,
   ) => Promise<QueryResult[]>;
   getSessionChunks: (
     url: string,
@@ -146,16 +159,17 @@ export function createToolHandlers(deps: {
   const querySessionsHandler = async (args: {
     queryText: string;
     project?: string;
+    source?: string;
     limit?: number;
   }) => {
     const limit = args.limit ?? 5;
     console.error(
-      `[query_sessions] text="${args.queryText}" project="${args.project ?? "any"}" limit=${limit}`,
+      `[query_sessions] text="${args.queryText}" project="${args.project ?? "any"}" source="${args.source ?? "any"}" limit=${limit}`,
     );
 
     try {
       const embedding = await createEmbedding(args.queryText);
-      const results = await querySessions(embedding, limit, args.project);
+      const results = await querySessions(embedding, limit, args.project, args.source);
 
       if (results.length === 0) {
         return {

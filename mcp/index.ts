@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 /**
- * opencode-memory MCP server (stdio transport).
+ * code-session-memory MCP server (stdio transport).
  *
  * Exposes two tools:
- *   - query_sessions   — semantic search across indexed OpenCode sessions
+ *   - query_sessions     — semantic search across indexed sessions (OpenCode + Claude Code)
  *   - get_session_chunks — retrieve ordered chunks for a specific session URL
  *
  * Environment variables:
@@ -37,7 +37,7 @@ if (!openAiApiKey) {
 
 if (!fs.existsSync(dbPath)) {
   console.error(
-    `Error: Database not found at ${dbPath}.\nRun "npx opencode-memory install" first.`,
+    `Error: Database not found at ${dbPath}.\nRun "npx code-session-memory install" first.`,
   );
   process.exit(1);
 }
@@ -81,14 +81,15 @@ const { querySessionsHandler, getSessionChunksHandler } = createToolHandlers({
 // ---------------------------------------------------------------------------
 
 const server = new McpServer({
-  name: "opencode-memory",
-  version: "0.1.0",
+  name: "code-session-memory",
+  version: "0.3.0",
 });
 
 // Zod schemas defined separately to avoid type instantiation depth issues
 const querySessionsSchema = {
   queryText: z.string().min(1).describe("Natural language description of what you are looking for."),
   project: z.string().optional().describe("Filter results to a specific project directory path (e.g. '/Users/me/myproject'). Optional."),
+  source: z.enum(["opencode", "claude-code"]).optional().describe("Filter results by tool source: 'opencode' or 'claude-code'. Optional — omit to search across both."),
   limit: z.number().int().min(1).optional().describe("Maximum number of results to return. Defaults to 5."),
 };
 
@@ -104,9 +105,9 @@ const serverAny = server as any;
 
 serverAny.tool(
   "query_sessions",
-  "Semantically search across all indexed OpenCode sessions stored in the vector database. Returns the most relevant chunks from past sessions.",
+  "Semantically search across all indexed sessions stored in the vector database. Returns the most relevant chunks from past sessions. Sessions from both OpenCode and Claude Code are indexed into the same shared database.",
   querySessionsSchema,
-  async (args: { queryText: string; project?: string; limit?: number }) =>
+  async (args: { queryText: string; project?: string; source?: string; limit?: number }) =>
     querySessionsHandler({ ...args, limit: args.limit ?? 5 }),
 );
 
@@ -125,7 +126,7 @@ serverAny.tool(
 async function main() {
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  console.error(`opencode-memory MCP server running (DB: ${dbPath})`);
+  console.error(`code-session-memory MCP server running (DB: ${dbPath})`);
 }
 
 main().catch((err) => {

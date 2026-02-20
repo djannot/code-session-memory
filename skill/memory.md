@@ -1,10 +1,10 @@
 ---
-description: Search past OpenCode sessions stored in the vector memory database
+description: Search past OpenCode and Claude Code sessions stored in the shared vector memory database
 ---
 
-# opencode-session-memory
+# code-session-memory
 
-You have access to an MCP server called `opencode-session-memory` that automatically indexes all your past OpenCode sessions into a local vector database. Every time a session completes a turn, the new messages are embedded and stored — giving you a searchable memory of your entire AI coding history.
+You have access to an MCP server called `code-session-memory` that automatically indexes all your past coding sessions — from both **OpenCode** and **Claude Code** — into a single shared local vector database. Every time a session completes a turn, the new messages are embedded and stored, giving you a searchable memory of your entire AI coding history across both tools.
 
 ## Available tools
 
@@ -13,26 +13,19 @@ You have access to an MCP server called `opencode-session-memory` that automatic
 Semantically search across all indexed sessions to find past conversations, decisions, code snippets, or context.
 
 **Parameters:**
-- `queryText` *(required)*: A natural language description of what you are looking for. Be specific — describe the topic, technology, decision, or problem.
-- `project` *(optional)*: Filter results to a specific project directory path (e.g. `"/Users/me/myproject"`). Omit to search across all projects.
+- `queryText` *(required)*: A natural language description of what you are looking for.
+- `project` *(optional)*: Filter results to a specific project directory path (e.g. `"/Users/me/myproject"`).
+- `source` *(optional)*: Filter by tool — `"opencode"` or `"claude-code"`. Omit to search across both.
 - `limit` *(optional, default 5)*: Number of results to return (1–20).
-
-**Returns:** Ranked list of matching chunks, each with:
-- Content of the chunk (includes contextual prefix like `[Session: Title > Section]`)
-- Similarity distance (lower = more similar)
-- Session URL in `session://ses_xxx#msg_yyy` format
-- Section and chunk position within the message
 
 ### `get_session_chunks`
 
-Retrieve the full ordered content of a specific session message. Use this after `query_sessions` to get the complete context around a match — e.g. to read the full assistant response or user request that surrounded a relevant snippet.
+Retrieve the full ordered content of a specific session message by URL.
 
 **Parameters:**
 - `sessionUrl` *(required)*: The `session://ses_xxx#msg_yyy` URL from a `query_sessions` result.
-- `startIndex` *(optional)*: First chunk index to retrieve (0-based). Omit to start from the beginning.
-- `endIndex` *(optional)*: Last chunk index to retrieve (0-based, inclusive). Omit to read to the end.
-
-**Returns:** All chunks of the message in order, with content and section info.
+- `startIndex` *(optional)*: First chunk index to retrieve (0-based).
+- `endIndex` *(optional)*: Last chunk index to retrieve (0-based, inclusive).
 
 ## When to use these tools
 
@@ -42,29 +35,27 @@ Use `query_sessions` proactively when:
 - The user references a previous decision: *"What did we decide about the database schema?"*
 - You want to avoid repeating past mistakes or reinventing solutions
 
-Use `get_session_chunks` when:
-- A `query_sessions` result is a snippet but you need the full message for context
-- You want to read a complete assistant response or explanation from a past session
+Use `get_session_chunks` to read the full context around a match from `query_sessions`.
 
 ## Example usage
 
 ```
-# Find past work on a topic
-query_sessions("authentication middleware implementation", project="/Users/me/myapi")
+# Find past work on a topic across all tools
+query_sessions("authentication middleware implementation")
+
+# Search only OpenCode sessions for a specific project
+query_sessions("dark mode toggle", project="/Users/me/myapp", source="opencode")
+
+# Search only Claude Code sessions
+query_sessions("sqlite migration", source="claude-code")
 
 # Get more context from a specific result
 get_session_chunks("session://ses_abc123#msg_def456")
-
-# Search for a past error discussion
-query_sessions("sqlite-vec dimension mismatch error")
-
-# Find how a feature was planned
-query_sessions("dark mode toggle implementation plan")
 ```
 
 ## Notes
 
-- Sessions are indexed automatically after each agent turn — no manual action needed.
-- Only messages from the current and past sessions are indexed; future messages are indexed as they happen.
-- The database lives at `~/.local/share/opencode-memory/sessions.db`.
+- Sessions from both OpenCode and Claude Code are indexed into the **same** database.
+- Indexing is automatic — no manual action needed.
+- The database lives at `~/.local/share/code-session-memory/sessions.db`.
 - Embeddings use OpenAI `text-embedding-3-large` (3072 dimensions).

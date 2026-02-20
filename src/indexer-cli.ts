@@ -13,6 +13,7 @@
  * Uses plain fetch() to call the REST API — no ESM/CJS SDK dependency.
  */
 
+import { resolveDbPath, openDatabase } from "./database";
 import { indexNewMessages } from "./indexer";
 import type { FullMessage } from "./types";
 
@@ -29,7 +30,7 @@ async function main() {
   const serverUrl = process.argv[3];
 
   if (!sessionId || !serverUrl) {
-    console.error("Usage: indexer-cli <sessionId> <serverUrl>");
+    process.stderr.write("Usage: indexer-cli <sessionId> <serverUrl>\n");
     process.exit(1);
   }
 
@@ -43,22 +44,25 @@ async function main() {
     fetchJson<FullMessage[]>(`${base}/session/${sessionId}/message`),
   ]);
 
-  const { indexed, skipped } = await indexNewMessages(
-    {
-      id: session.id,
-      title: session.title,
-      directory: session.directory,
-    },
-    messages,
-  );
+  const dbPath = resolveDbPath();
+  const db = openDatabase({ dbPath });
+  try {
+    await indexNewMessages(
+      db,
+      { id: session.id, title: session.title, directory: session.directory },
+      messages,
+      "opencode",
+    );
+  } finally {
+    db.close();
+  }
 
   // No output — the plugin runs this silently via Bun's $.quiet()
 }
 
 main().catch((err) => {
-  console.error(
-    "[opencode-memory] indexer-cli error:",
-    err instanceof Error ? err.message : String(err),
+  process.stderr.write(
+    `[code-session-memory] indexer-cli error: ${err instanceof Error ? err.message : String(err)}\n`,
   );
   process.exit(1);
 });

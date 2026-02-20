@@ -11,7 +11,7 @@ import type { SessionInfo, FullMessage } from "../src/types";
 // 3. Overriding the DB path so the indexer uses a temp file
 // ---------------------------------------------------------------------------
 
-import { indexNewMessages, reindexSession } from "../src/indexer";
+import { indexNewMessagesWithOptions as indexNewMessages, reindexSession } from "../src/indexer";
 
 const EMBEDDING_DIM = 3072;
 
@@ -72,14 +72,14 @@ function makeMessages(count: number, startIndex = 0): FullMessage[] {
 describe("indexNewMessages", () => {
   it("returns {indexed:0, skipped:0} for empty messages", async () => {
     const dbPath = makeTempDbPath();
-    const result = await indexNewMessages(makeSession(), [], { dbPath });
+    const result = await indexNewMessages(makeSession(), [], "opencode", { dbPath });
     expect(result).toEqual({ indexed: 0, skipped: 0 });
   });
 
   it("indexes all messages on first run", async () => {
     const dbPath = makeTempDbPath();
     const messages = makeMessages(3);
-    const result = await indexNewMessages(makeSession(), messages, { dbPath });
+    const result = await indexNewMessages(makeSession(), messages, "opencode", { dbPath });
     expect(result.indexed).toBe(3);
     expect(result.skipped).toBe(0);
   });
@@ -87,7 +87,7 @@ describe("indexNewMessages", () => {
   it("stores last_indexed_message_id in sessions_meta", async () => {
     const dbPath = makeTempDbPath();
     const messages = makeMessages(3);
-    await indexNewMessages(makeSession(), messages, { dbPath });
+    await indexNewMessages(makeSession(), messages, "opencode", { dbPath });
 
     // Read the meta directly
     const db = new Database(dbPath);
@@ -104,11 +104,11 @@ describe("indexNewMessages", () => {
     const messages = makeMessages(4);
 
     // First run: index all 4
-    const first = await indexNewMessages(makeSession(), messages, { dbPath });
+    const first = await indexNewMessages(makeSession(), messages, "opencode", { dbPath });
     expect(first.indexed).toBe(4);
 
     // Second run with same messages: nothing new
-    const second = await indexNewMessages(makeSession(), messages, { dbPath });
+    const second = await indexNewMessages(makeSession(), messages, "opencode", { dbPath });
     expect(second.indexed).toBe(0);
     expect(second.skipped).toBe(4);
   });
@@ -118,11 +118,11 @@ describe("indexNewMessages", () => {
     const initialMessages = makeMessages(3);
 
     // First run
-    await indexNewMessages(makeSession(), initialMessages, { dbPath });
+    await indexNewMessages(makeSession(), initialMessages, "opencode", { dbPath });
 
     // Add 2 more messages
     const allMessages = [...initialMessages, ...makeMessages(2, 3)];
-    const second = await indexNewMessages(makeSession(), allMessages, { dbPath });
+    const second = await indexNewMessages(makeSession(), allMessages, "opencode", { dbPath });
 
     expect(second.indexed).toBe(2);
     expect(second.skipped).toBe(3);
@@ -134,8 +134,8 @@ describe("indexNewMessages", () => {
     const sessionB = makeSession("ses_B");
     const messages = makeMessages(2);
 
-    const resA = await indexNewMessages(sessionA, messages, { dbPath });
-    const resB = await indexNewMessages(sessionB, messages, { dbPath });
+    const resA = await indexNewMessages(sessionA, messages, "opencode", { dbPath });
+    const resB = await indexNewMessages(sessionB, messages, "opencode", { dbPath });
 
     expect(resA.indexed).toBe(2);
     expect(resB.indexed).toBe(2);
@@ -150,7 +150,7 @@ describe("indexNewMessages", () => {
       },
     ];
     // Should not throw, just skip empty messages
-    const result = await indexNewMessages(makeSession(), messages, { dbPath });
+    const result = await indexNewMessages(makeSession(), messages, "opencode", { dbPath });
     expect(result.indexed).toBe(1); // message processed but no chunks created
   });
 });
@@ -161,10 +161,10 @@ describe("reindexSession", () => {
     const messages = makeMessages(3);
 
     // Initial index
-    await indexNewMessages(makeSession(), messages, { dbPath });
+    await indexNewMessages(makeSession(), messages, "opencode", { dbPath });
 
     // Simulate partial new index — there's nothing new
-    const second = await indexNewMessages(makeSession(), messages, { dbPath });
+    const second = await indexNewMessages(makeSession(), messages, "opencode", { dbPath });
     expect(second.indexed).toBe(0);
 
     // Reindex from scratch
