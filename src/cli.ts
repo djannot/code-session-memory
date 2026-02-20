@@ -49,6 +49,15 @@ function getClaudeSettingsPath(): string {
   return path.join(getClaudeConfigDir(), "settings.json");
 }
 
+/**
+ * ~/.claude.json — user-scoped config file where Claude Code stores global
+ * MCP servers (written by `claude mcp add --scope user`).
+ */
+function getClaudeUserConfigPath(): string {
+  // ~/.claude.json lives next to the ~/.claude/ directory
+  return path.join(path.dirname(getClaudeConfigDir()), ".claude.json");
+}
+
 function getClaudeMdPath(): string {
   return path.join(getClaudeConfigDir(), "CLAUDE.md");
 }
@@ -301,48 +310,51 @@ function checkMcpConfigured(): boolean {
 }
 
 /**
- * Merges the code-session-memory MCP entry into ~/.claude/settings.json.
- * Claude Code uses the "mcpServers" key with { command, args } shape.
+ * Merges the code-session-memory MCP entry into ~/.claude.json (user-scoped).
+ * Claude Code stores global MCP servers here under "mcpServers" with
+ * { type: "stdio", command, args, env } shape.
  */
-function installClaudeMcpConfig(mcpServerPath: string): { settingsPath: string; existed: boolean } {
-  const settingsPath = getClaudeSettingsPath();
-  const existed = fs.existsSync(settingsPath);
+function installClaudeMcpConfig(mcpServerPath: string): { configPath: string; existed: boolean } {
+  const configPath = getClaudeUserConfigPath();
+  const existed = fs.existsSync(configPath);
 
-  let settings: Record<string, unknown> = {};
+  let config: Record<string, unknown> = {};
   if (existed) {
     try {
-      settings = JSON.parse(fs.readFileSync(settingsPath, "utf8"));
+      config = JSON.parse(fs.readFileSync(configPath, "utf8"));
     } catch {
-      throw new Error(`Could not parse existing ${settingsPath} — please check it is valid JSON.`);
+      throw new Error(`Could not parse existing ${configPath} — please check it is valid JSON.`);
     }
   }
 
-  if (!settings.mcpServers || typeof settings.mcpServers !== "object") settings.mcpServers = {};
-  (settings.mcpServers as Record<string, unknown>)["code-session-memory"] = {
+  if (!config.mcpServers || typeof config.mcpServers !== "object") config.mcpServers = {};
+  (config.mcpServers as Record<string, unknown>)["code-session-memory"] = {
+    type: "stdio",
     command: "node",
     args: [mcpServerPath],
+    env: {},
   };
 
-  ensureDir(path.dirname(settingsPath));
-  fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + "\n", "utf8");
-  return { settingsPath, existed };
+  ensureDir(path.dirname(configPath));
+  fs.writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n", "utf8");
+  return { configPath, existed };
 }
 
 /**
- * Removes the code-session-memory MCP entry from ~/.claude/settings.json.
+ * Removes the code-session-memory MCP entry from ~/.claude.json.
  */
 function uninstallClaudeMcpConfig(): "done" | "not_found" {
-  const settingsPath = getClaudeSettingsPath();
-  if (!fs.existsSync(settingsPath)) return "not_found";
+  const configPath = getClaudeUserConfigPath();
+  if (!fs.existsSync(configPath)) return "not_found";
   try {
-    const settings = JSON.parse(fs.readFileSync(settingsPath, "utf8")) as Record<string, unknown>;
+    const config = JSON.parse(fs.readFileSync(configPath, "utf8")) as Record<string, unknown>;
     if (
-      settings.mcpServers &&
-      typeof settings.mcpServers === "object" &&
-      "code-session-memory" in (settings.mcpServers as object)
+      config.mcpServers &&
+      typeof config.mcpServers === "object" &&
+      "code-session-memory" in (config.mcpServers as object)
     ) {
-      delete (settings.mcpServers as Record<string, unknown>)["code-session-memory"];
-      fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + "\n", "utf8");
+      delete (config.mcpServers as Record<string, unknown>)["code-session-memory"];
+      fs.writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n", "utf8");
       return "done";
     }
     return "not_found";
@@ -352,13 +364,13 @@ function uninstallClaudeMcpConfig(): "done" | "not_found" {
 }
 
 function checkClaudeMcpConfigured(): boolean {
-  const settingsPath = getClaudeSettingsPath();
+  const configPath = getClaudeUserConfigPath();
   try {
-    const settings = JSON.parse(fs.readFileSync(settingsPath, "utf8")) as Record<string, unknown>;
+    const config = JSON.parse(fs.readFileSync(configPath, "utf8")) as Record<string, unknown>;
     return !!(
-      settings.mcpServers &&
-      typeof settings.mcpServers === "object" &&
-      "code-session-memory" in (settings.mcpServers as object)
+      config.mcpServers &&
+      typeof config.mcpServers === "object" &&
+      "code-session-memory" in (config.mcpServers as object)
     );
   } catch { return false; }
 }
@@ -451,8 +463,8 @@ function install(): void {
 
   // 5. Claude Code MCP config
   step("Configuring Claude Code MCP server", () => {
-    const { settingsPath, existed } = installClaudeMcpConfig(mcpPath);
-    return `${existed ? "updated" : "created"} ${settingsPath}`;
+    const { configPath, existed } = installClaudeMcpConfig(mcpPath);
+    return `${existed ? "updated" : "created"} ${configPath}`;
   });
 
   // 6. Claude Code hook
@@ -492,7 +504,7 @@ function status(): void {
   console.log(`  ${ok(checkMcpConfigured())}  MCP config  ${dim(getGlobalOpenCodeConfigPath())}`);
 
   console.log(bold("\n  Claude Code"));
-  console.log(`  ${ok(checkClaudeMcpConfigured())}  MCP config  ${dim(getClaudeSettingsPath())}`);
+  console.log(`  ${ok(checkClaudeMcpConfigured())}  MCP config  ${dim(getClaudeUserConfigPath())}`);
   console.log(`  ${ok(checkClaudeHookInstalled())}  Stop hook   ${dim(getClaudeSettingsPath())}`);
   console.log(`  ${ok(checkClaudeMdInstalled())}  CLAUDE.md   ${dim(getClaudeMdPath())}`);
 
