@@ -1,0 +1,57 @@
+{
+  "composerId": "8c5c40cd-fd4a-4a26-8c97-1fc4b60caf1d",
+  "name": "File reading tool usage",
+  "messages": [
+    {
+      "info": {
+        "id": "6e345dc5-854b-4e88-b84b-1e7626ea0975",
+        "role": "user",
+        "time": {
+          "created": 1771596931729
+        }
+      },
+      "parts": [
+        {
+          "type": "text",
+          "text": "Use a tool to read a file"
+        }
+      ]
+    },
+    {
+      "info": {
+        "id": "52c77aea-565d-45c6-a894-acfc734c40af",
+        "role": "assistant",
+        "time": {
+          "created": 1771596940125
+        }
+      },
+      "parts": [
+        {
+          "type": "tool-invocation",
+          "toolName": "read_file_v2",
+          "toolCallId": "tool_4451278f-d369-44d7-bd75-6b01e68cb4a",
+          "state": "result",
+          "args": {
+            "path": "/Users/denisjannot/Documents/internal-services/services/qdrant/sync/config.yaml"
+          },
+          "result": ""
+        }
+      ]
+    },
+    {
+      "info": {
+        "id": "60c60e90-c605-4431-abed-b269f96dbb31",
+        "role": "assistant",
+        "time": {
+          "created": 1771596941183
+        }
+      },
+      "parts": [
+        {
+          "type": "text",
+          "text": "The file `/Users/denisjannot/Documents/internal-services/services/qdrant/sync/config.yaml` is a Kubernetes ConfigMap that defines Doc2Vec sync configuration. Summary:\n\n**Structure**\n- **ConfigMap**: `doc2vec-config` in namespace `qdrant`\n- **Markdown store**: PostgreSQL at `postgresql.postgresql.svc.cluster.local:5432/doc2vec`\n- **Vector DB**: Qdrant at `http://qdrant:6333`\n\n**Source types**\n\n1. **Local directory** – `solo-reference-architectures` from `./solo-reference-architectures`\n2. **GitHub** – Markdown from repos such as istio, solo-istio, solo-projects, gloo-gateway, kgateway, agentgateway, kagent, gloo-mesh-enterprise\n3. **Zendesk** – Tickets and articles from `solo-io`\n4. **Code** – Source code from agentgateway, kgateway, kagent, istio, gloo-gateway, gloo-mesh-enterprise, procgen, gloo\n5. **Website** – Docs from ambientmesh.io, gateway-api, docs.solo.io (gloo-mesh, gloo-edge, gateway, kgateway, agentgateway, kagent), helm.sh, istio.io, kgateway.dev, kagent.dev, kubernetes.io, opentelemetry.io, prometheus.io, Argo CD, Argo Rollouts\n\nEach source has its own Qdrant collection and common settings like `max_size: 1048576` (1MB)."
+        }
+      ]
+    }
+  ]
+}

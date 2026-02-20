@@ -2,12 +2,10 @@
 /**
  * sessions sub-commands for code-session-memory CLI
  *
- *   sessions [list]              Browse sessions (interactive TUI)
- *   sessions list --filter       Browse with filter step first
+ *   sessions [list]              Browse sessions (3-level tree: source → date → session)
  *   sessions print [id]          Print all chunks of a session to stdout
- *   sessions print --filter      Pick session interactively with filter, then print
  *   sessions delete [id]         Delete a session from the DB
- *   sessions delete --filter     Pick session interactively with filter, then delete
+ *   sessions purge [--days <n>] [--yes]  Delete all sessions older than N days
  */
 
 import * as clack from "@clack/prompts";
@@ -16,6 +14,7 @@ import {
   listSessions,
   getSessionChunksOrdered,
   deleteSession,
+  deleteSessionsOlderThan,
   SessionRow,
   SessionFilter,
 } from "./database";
@@ -38,7 +37,9 @@ function fmtDate(unixMs: number): string {
 }
 
 function fmtSource(source: string): string {
-  return source === "opencode" ? cyan("opencode") : yellow("claude-code");
+  if (source === "opencode")    return cyan("opencode");
+  if (source === "cursor")      return green("cursor");
+  return yellow("claude-code");
 }
 
 function fmtTitle(title: string): string {
@@ -51,12 +52,16 @@ function fmtProject(project: string): string {
   return parts.length > 2 ? dim("…/" + parts.slice(-2).join("/")) : dim(project);
 }
 
+function fmtChunks(n: number): string {
+  return `${n} chunk${n !== 1 ? "s" : ""}`;
+}
+
 function hr(char = "─", width = 72): string {
   return char.repeat(width);
 }
 
 // ---------------------------------------------------------------------------
-// DB helpers (open/close around each command)
+// DB helpers
 // ---------------------------------------------------------------------------
 
 function withDb<T>(fn: (db: ReturnType<typeof openDatabase>) => T): T {
@@ -70,14 +75,13 @@ function withDb<T>(fn: (db: ReturnType<typeof openDatabase>) => T): T {
 }
 
 // ---------------------------------------------------------------------------
-// Label builder for the session picker
+// Label builders
 // ---------------------------------------------------------------------------
 
 function sessionLabel(s: SessionRow): string {
-  const date   = fmtDate(s.updated_at);
-  const chunks = `${s.chunk_count} chunk${s.chunk_count !== 1 ? "s" : ""}`;
+  const chunks = fmtChunks(s.chunk_count);
   const title  = fmtTitle(s.session_title).padEnd(40);
-  return `${title}  ${date}  ${chunks}`;
+  return `${title}  ${chunks}`;
 }
 
 function sessionHint(s: SessionRow): string {
@@ -85,112 +89,145 @@ function sessionHint(s: SessionRow): string {
 }
 
 // ---------------------------------------------------------------------------
-// Filter step (shown when --filter flag is present)
+// Tree picker: source → date → session
+//
+// Returns the chosen SessionRow, or null if the user exited/cancelled.
 // ---------------------------------------------------------------------------
 
-async function runFilterStep(): Promise<SessionFilter> {
-  clack.intro(bold("Filter sessions"));
+type PickResult = SessionRow | null;
 
-  const sourceAnswer = await clack.select<string>({
+async function pickSessionTree(allSessions: SessionRow[]): Promise<PickResult> {
+  if (allSessions.length === 0) return null;
+
+  // ── Level 1: choose source ──────────────────────────────────────────────
+
+  // Group by source, count sessions + chunks
+  const sourceMap = new Map<string, SessionRow[]>();
+  for (const s of allSessions) {
+    if (!sourceMap.has(s.source)) sourceMap.set(s.source, []);
+    sourceMap.get(s.source)!.push(s);
+  }
+
+  // Sort sources by session count descending
+  const sources = [...sourceMap.entries()].sort((a, b) => b[1].length - a[1].length);
+
+  const sourceOptions = [
+    ...sources.map(([src, rows]) => ({
+      value: src,
+      label: sourceLabelText(src),
+      hint:  `${rows.length} session${rows.length !== 1 ? "s" : ""}  ${fmtChunks(rows.reduce((n, r) => n + r.chunk_count, 0))}`,
+    })),
+    { value: "__all__",  label: dim("All sessions"), hint: `${allSessions.length} total` },
+    { value: "__exit__", label: dim("Exit") },
+  ];
+
+  const srcChoice = await clack.select<string>({
     message: "Source",
-    options: [
-      { value: "all",         label: "All tools" },
-      { value: "opencode",    label: "OpenCode" },
-      { value: "claude-code", label: "Claude Code" },
-    ],
-    initialValue: "all",
+    options: sourceOptions,
+    maxItems: 8,
   });
-  if (clack.isCancel(sourceAnswer)) { clack.cancel("Cancelled."); process.exit(0); }
 
-  const dateAnswer = await clack.select<string>({
-    message: "Date range",
-    options: [
-      { value: "all",    label: "All time" },
-      { value: "7d",     label: "Last 7 days" },
-      { value: "30d",    label: "Last 30 days" },
-      { value: "90d",    label: "Last 90 days" },
-      { value: "recent", label: "Last N days",    hint: "enter a number" },
-      { value: "older",  label: "Older than N days", hint: "enter a number" },
-    ],
-    initialValue: "all",
-  });
-  if (clack.isCancel(dateAnswer)) { clack.cancel("Cancelled."); process.exit(0); }
+  if (clack.isCancel(srcChoice) || srcChoice === "__exit__") return null;
 
-  const filter: SessionFilter = {};
+  const filteredBySrc: SessionRow[] =
+    srcChoice === "__all__" ? allSessions : sourceMap.get(srcChoice)!;
 
-  if (sourceAnswer !== "all") {
-    filter.source = sourceAnswer as SessionSource;
+  // ── Level 2: choose date (skip if only one date or "All sessions") ──────
+
+  let filteredByDate: SessionRow[];
+
+  if (srcChoice === "__all__") {
+    // Skip date level — go straight to all sessions
+    filteredByDate = filteredBySrc;
+  } else {
+    // Group by YYYY-MM-DD
+    const dateMap = new Map<string, SessionRow[]>();
+    for (const s of filteredBySrc) {
+      const d = fmtDate(s.updated_at);
+      if (!dateMap.has(d)) dateMap.set(d, []);
+      dateMap.get(d)!.push(s);
+    }
+
+    if (dateMap.size === 1) {
+      // Only one date — skip level 2
+      filteredByDate = filteredBySrc;
+    } else {
+      const dates = [...dateMap.entries()].sort((a, b) => b[0].localeCompare(a[0]));
+      const dateOptions = [
+        ...dates.map(([date, rows]) => ({
+          value: date,
+          label: date,
+          hint:  `${rows.length} session${rows.length !== 1 ? "s" : ""}`,
+        })),
+        { value: "__back__", label: dim("Back") },
+      ];
+
+      const dateChoice = await clack.select<string>({
+        message: `Date  ${dim("(" + sourceLabelText(srcChoice) + ")")}`,
+        options: dateOptions,
+        maxItems: 10,
+      });
+
+      if (clack.isCancel(dateChoice) || dateChoice === "__back__") {
+        // Go back to level 1
+        return pickSessionTree(allSessions);
+      }
+
+      filteredByDate = dateMap.get(dateChoice)!;
+    }
   }
 
-  const nowMs  = Date.now();
-  const DAY_MS = 86400 * 1000;
+  // ── Level 3: choose session ──────────────────────────────────────────────
 
-  if (dateAnswer === "7d") {
-    filter.fromDate = nowMs - 7 * DAY_MS;
-  } else if (dateAnswer === "30d") {
-    filter.fromDate = nowMs - 30 * DAY_MS;
-  } else if (dateAnswer === "90d") {
-    filter.fromDate = nowMs - 90 * DAY_MS;
-  } else if (dateAnswer === "recent") {
-    const nAnswer = await clack.text({
-      message: "Show sessions from the last how many days?",
-      placeholder: "14",
-      validate(v) {
-        if (!v || isNaN(Number(v)) || Number(v) <= 0) return "Please enter a positive number.";
-      },
-    });
-    if (clack.isCancel(nAnswer)) { clack.cancel("Cancelled."); process.exit(0); }
-    filter.fromDate = nowMs - Number(nAnswer) * DAY_MS;
-  } else if (dateAnswer === "older") {
-    const nAnswer = await clack.text({
-      message: "Show sessions older than how many days?",
-      placeholder: "30",
-      validate(v) {
-        if (!v || isNaN(Number(v)) || Number(v) <= 0) return "Please enter a positive number.";
-      },
-    });
-    if (clack.isCancel(nAnswer)) { clack.cancel("Cancelled."); process.exit(0); }
-    filter.toDate = nowMs - Number(nAnswer) * DAY_MS;
-  }
+  const sessionOptions = [
+    ...filteredByDate.map((s) => ({
+      value: s.session_id,
+      label: sessionLabel(s),
+      hint:  sessionHint(s),
+    })),
+    { value: "__back__", label: dim("Back") },
+  ];
 
-  return filter;
-}
+  const backLabel = srcChoice === "__all__"
+    ? "Source"
+    : dateMap_size(filteredBySrc) === 1 ? "Source" : "Date";
 
-// ---------------------------------------------------------------------------
-// Shared session picker
-// Returns the chosen SessionRow, or null if the user cancelled / exited.
-// When withFilter is true, runs the filter step first.
-// ---------------------------------------------------------------------------
+  const sessionOptions2 = sessionOptions.map((o) =>
+    o.value === "__back__" ? { ...o, hint: `back to ${backLabel}` } : o,
+  );
 
-async function pickSession(withFilter: boolean): Promise<SessionRow | null> {
-  let filter: SessionFilter = {};
-  if (withFilter) {
-    filter = await runFilterStep();
-    console.log();
-  }
-
-  const sessions = withDb((db) => listSessions(db, filter));
-
-  if (sessions.length === 0) {
-    clack.log.warn("No sessions match the current filter.");
-    return null;
-  }
-
-  const chosen = await clack.select<string | "__cancel__">({
-    message: `${sessions.length} session${sessions.length !== 1 ? "s" : ""}${withFilter ? dim("  (filtered)") : ""}  — pick one`,
-    options: [
-      ...sessions.map((s) => ({
-        value: s.session_id,
-        label: sessionLabel(s),
-        hint:  sessionHint(s),
-      })),
-      { value: "__cancel__", label: dim("Cancel") },
-    ],
+  const sessionChoice = await clack.select<string>({
+    message: srcChoice === "__all__"
+      ? `Session  ${dim("(all sources)")}`
+      : `Session  ${dim("(" + sourceLabelText(srcChoice) + ")")}`,
+    options: sessionOptions2,
     maxItems: 12,
   });
 
-  if (clack.isCancel(chosen) || chosen === "__cancel__") return null;
-  return sessions.find((s) => s.session_id === chosen) ?? null;
+  if (clack.isCancel(sessionChoice) || sessionChoice === "__back__") {
+    if (srcChoice === "__all__" || dateMap_size(filteredBySrc) === 1) {
+      // Back to level 1
+      return pickSessionTree(allSessions);
+    }
+    // Back to level 2 — re-run from source choice but pre-select the date level
+    // Simplest: restart from level 1 (preserves the loop invariant)
+    return pickSessionTree(allSessions);
+  }
+
+  return filteredByDate.find((s) => s.session_id === sessionChoice) ?? null;
+}
+
+// Helper: plain text source label (no ANSI) for use in hints/messages
+function sourceLabelText(source: string): string {
+  if (source === "opencode")    return "OpenCode";
+  if (source === "cursor")      return "Cursor";
+  if (source === "claude-code") return "Claude Code";
+  return source;
+}
+
+// Helper to count unique dates in a session list without capturing dateMap
+function dateMap_size(sessions: SessionRow[]): number {
+  return new Set(sessions.map((s) => fmtDate(s.updated_at))).size;
 }
 
 // ---------------------------------------------------------------------------
@@ -202,7 +239,7 @@ async function sessionActionLoop(session: SessionRow): Promise<"back" | "exit"> 
     clack.log.message(
       [
         `${bold(fmtTitle(session.session_title))}`,
-        `${fmtSource(session.source)}  ${fmtDate(session.updated_at)}  ${session.chunk_count} chunks`,
+        `${fmtSource(session.source)}  ${fmtDate(session.updated_at)}  ${fmtChunks(session.chunk_count)}`,
         `Project: ${session.project || dim("—")}`,
         `ID: ${dim(session.session_id)}`,
       ].join("\n"),
@@ -228,7 +265,7 @@ async function sessionActionLoop(session: SessionRow): Promise<"back" | "exit"> 
 
     if (action === "delete") {
       const confirmed = await clack.confirm({
-        message: `Delete "${fmtTitle(session.session_title)}" (${session.chunk_count} chunks)?`,
+        message: `Delete "${fmtTitle(session.session_title)}" (${fmtChunks(session.chunk_count)})?`,
         initialValue: false,
       });
       if (clack.isCancel(confirmed) || !confirmed) {
@@ -250,69 +287,54 @@ async function sessionActionLoop(session: SessionRow): Promise<"back" | "exit"> 
 // sessions list
 // ---------------------------------------------------------------------------
 
-export async function cmdSessionsList(args: string[]): Promise<void> {
-  const withFilter = args.includes("--filter");
-
-  if (!withFilter) {
-    clack.intro(bold("Sessions"));
-  }
-
-  // Main browse loop — re-shown after back/delete so the user can keep browsing
-  let filter: SessionFilter = {};
-  let filterResolved = false;
+export async function cmdSessionsList(): Promise<void> {
+  clack.intro(bold("Sessions"));
 
   while (true) {
-    // Run filter step once (first iteration only, if --filter was passed)
-    if (withFilter && !filterResolved) {
-      filter = await runFilterStep();
-      filterResolved = true;
-      console.log();
-    }
-
-    const sessions = withDb((db) => listSessions(db, filter));
+    const sessions = withDb((db) => listSessions(db));
 
     if (sessions.length === 0) {
-      clack.log.warn("No sessions match the current filter.");
+      clack.log.warn("No sessions indexed yet.");
       clack.outro("Done.");
       return;
     }
 
-    const chosen = await clack.select<string | "__exit__">({
-      message: `${sessions.length} session${sessions.length !== 1 ? "s" : ""}  ${withFilter ? dim("(filtered)") : ""}`,
-      options: [
-        ...sessions.map((s) => ({
-          value: s.session_id,
-          label: sessionLabel(s),
-          hint:  sessionHint(s),
-        })),
-        { value: "__exit__", label: dim("Exit") },
-      ],
-      maxItems: 12,
-    });
+    const session = await pickSessionTree(sessions);
 
-    if (clack.isCancel(chosen) || chosen === "__exit__") {
+    if (!session) {
       clack.outro("Done.");
       return;
     }
 
-    const session = sessions.find((s) => s.session_id === chosen)!;
     const result = await sessionActionLoop(session);
     if (result === "exit") return;
-    // result === "back" → loop again, refresh session list
+    // result === "back" → loop, refresh session list and restart tree
   }
+}
+
+// ---------------------------------------------------------------------------
+// Shared session picker (for print / delete sub-commands)
+// ---------------------------------------------------------------------------
+
+async function pickSession(): Promise<SessionRow | null> {
+  const sessions = withDb((db) => listSessions(db));
+
+  if (sessions.length === 0) {
+    clack.log.warn("No sessions indexed yet.");
+    return null;
+  }
+
+  return pickSessionTree(sessions);
 }
 
 // ---------------------------------------------------------------------------
 // sessions print [id]
 // ---------------------------------------------------------------------------
 
-export async function cmdSessionsPrint(sessionId?: string, args: string[] = []): Promise<void> {
-  const withFilter = args.includes("--filter");
-
+export async function cmdSessionsPrint(sessionId?: string): Promise<void> {
   if (!sessionId) {
-    // No ID given — launch interactive picker
     clack.intro(bold("Print session"));
-    const session = await pickSession(withFilter);
+    const session = await pickSession();
     if (!session) {
       clack.outro("Cancelled.");
       return;
@@ -341,8 +363,10 @@ function printSession(sessionId: string): void {
   const useTty = process.stdout.isTTY;
   const b = (s: string) => useTty ? bold(s)   : s;
   const d = (s: string) => useTty ? dim(s)    : s;
-  const c = (s: string) => useTty ? cyan(s)   : s;
-  const y = (s: string) => useTty ? yellow(s) : s;
+  const fmtSrc = (src: string) => {
+    if (!useTty) return src;
+    return fmtSource(src);
+  };
 
   const title   = session?.session_title || "(untitled)";
   const source  = session?.source        || "unknown";
@@ -351,7 +375,7 @@ function printSession(sessionId: string): void {
 
   console.log(hr());
   console.log(`${b("Session:")} ${title}`);
-  console.log(`${b("Source:")}  ${source === "opencode" ? c(source) : y(source)}  ${d(date)}`);
+  console.log(`${b("Source:")}  ${fmtSrc(source)}  ${d(date)}`);
   console.log(`${b("Project:")} ${project}`);
   console.log(`${b("ID:")}      ${d(sessionId)}`);
   console.log(`${b("Chunks:")}  ${chunks.length}`);
@@ -374,16 +398,13 @@ function printSession(sessionId: string): void {
 // sessions delete [id]
 // ---------------------------------------------------------------------------
 
-export async function cmdSessionsDelete(sessionId?: string, args: string[] = []): Promise<void> {
-  const withFilter = args.includes("--filter");
-
+export async function cmdSessionsDelete(sessionId?: string): Promise<void> {
   clack.intro(bold("Delete session"));
 
   let session: SessionRow | null = null;
 
   if (!sessionId) {
-    // No ID given — launch interactive picker
-    session = await pickSession(withFilter);
+    session = await pickSession();
     if (!session) {
       clack.outro("Cancelled.");
       return;
@@ -403,7 +424,7 @@ export async function cmdSessionsDelete(sessionId?: string, args: string[] = [])
   clack.log.message(
     [
       `${bold(fmtTitle(session.session_title))}`,
-      `${fmtSource(session.source)}  ${fmtDate(session.updated_at)}  ${session.chunk_count} chunks`,
+      `${fmtSource(session.source)}  ${fmtDate(session.updated_at)}  ${fmtChunks(session.chunk_count)}`,
       `Project: ${session.project || dim("—")}`,
       `ID: ${dim(session.session_id)}`,
     ].join("\n"),
@@ -411,7 +432,7 @@ export async function cmdSessionsDelete(sessionId?: string, args: string[] = [])
   );
 
   const confirmed = await clack.confirm({
-    message: `Delete this session (${session.chunk_count} chunks)?`,
+    message: `Delete this session (${fmtChunks(session.chunk_count)})?`,
     initialValue: false,
   });
 
@@ -429,6 +450,92 @@ export async function cmdSessionsDelete(sessionId?: string, args: string[] = [])
 }
 
 // ---------------------------------------------------------------------------
+// sessions purge [--days <n>] [--yes]
+// ---------------------------------------------------------------------------
+
+export async function cmdSessionsPurge(args: string[]): Promise<void> {
+  const DAY_MS = 86400 * 1000;
+
+  // Parse --days <n>
+  let days: number | undefined;
+  const daysIdx = args.indexOf("--days");
+  if (daysIdx !== -1 && args[daysIdx + 1]) {
+    const parsed = Number(args[daysIdx + 1]);
+    if (!Number.isInteger(parsed) || parsed <= 0) {
+      console.error("--days must be a positive integer");
+      process.exit(1);
+    }
+    days = parsed;
+  }
+
+  const skipConfirm = args.includes("--yes");
+
+  if (!skipConfirm) {
+    clack.intro(bold("Purge old sessions"));
+  }
+
+  // Prompt for days if not provided
+  if (days === undefined) {
+    const answer = await clack.text({
+      message: "Delete sessions older than how many days?",
+      placeholder: "30",
+      validate(v) {
+        const n = Number(v);
+        if (!v || !Number.isInteger(n) || n <= 0) return "Please enter a positive integer.";
+      },
+    });
+    if (clack.isCancel(answer)) {
+      clack.cancel("Cancelled.");
+      return;
+    }
+    days = Number(answer);
+  }
+
+  const cutoff = Date.now() - days * DAY_MS;
+  const candidates = withDb((db) => listSessions(db, { toDate: cutoff }));
+
+  if (candidates.length === 0) {
+    const msg = `No sessions older than ${days} day${days !== 1 ? "s" : ""} found.`;
+    if (skipConfirm) {
+      console.log(msg);
+    } else {
+      clack.log.info(msg);
+      clack.outro("Nothing to purge.");
+    }
+    return;
+  }
+
+  const totalChunks = candidates.reduce((n, s) => n + s.chunk_count, 0);
+  const summary = `${candidates.length} session${candidates.length !== 1 ? "s" : ""} (${totalChunks} chunks) older than ${days} day${days !== 1 ? "s" : ""}`;
+
+  if (skipConfirm) {
+    // Non-interactive: just do it
+    const result = withDb((db) => deleteSessionsOlderThan(db, cutoff));
+    console.log(`Deleted ${result.sessions} sessions (${result.chunks} chunks).`);
+    return;
+  }
+
+  clack.log.warn(`Found ${summary}.`);
+
+  const confirmed = await clack.confirm({
+    message: `Permanently delete ${summary}?`,
+    initialValue: false,
+  });
+
+  if (clack.isCancel(confirmed) || !confirmed) {
+    clack.cancel("Purge cancelled — database was not modified.");
+    return;
+  }
+
+  const result = withDb((db) => deleteSessionsOlderThan(db, cutoff));
+  clack.log.success(`Deleted ${result.sessions} sessions (${result.chunks} chunks).`);
+  clack.log.warn(
+    "Note: sessions will be re-indexed on the next agent turn if source files still exist.",
+  );
+  clack.outro("Done.");
+}
+
+// ---------------------------------------------------------------------------
 // Help
 // ---------------------------------------------------------------------------
 
@@ -438,22 +545,18 @@ function sessionsHelp(): void {
 ${b("sessions")} — Browse, inspect, and delete indexed sessions
 
 ${b("Usage:")}
-  npx code-session-memory sessions                Browse sessions interactively
-  npx code-session-memory sessions --filter       Apply source/date filters before browsing
+  npx code-session-memory sessions                Browse sessions (tree: source → date → session)
   npx code-session-memory sessions list           Same as above (explicit sub-command)
-  npx code-session-memory sessions list --filter  Same with filter step
 
   npx code-session-memory sessions print          Pick a session interactively, then print
-  npx code-session-memory sessions print --filter Pick with filter, then print
   npx code-session-memory sessions print <id>     Print all chunks of a session directly
 
   npx code-session-memory sessions delete         Pick a session interactively, then delete
-  npx code-session-memory sessions delete --filter Pick with filter, then delete
   npx code-session-memory sessions delete <id>    Delete a session directly
 
-${b("Filter options")} (with --filter):
-  Source:     All tools / OpenCode / Claude Code
-  Date range: Last 7 / 30 / 90 days, last N days (custom), older than N days (custom)
+  npx code-session-memory sessions purge          Delete sessions older than N days (interactive)
+  npx code-session-memory sessions purge --days <n>         Non-interactive, prompts for confirmation
+  npx code-session-memory sessions purge --days <n> --yes   Fully non-interactive (no confirmation)
 
 ${b("Notes:")}
   - Deleting a session only removes it from the DB. If the source files still
@@ -463,13 +566,12 @@ ${b("Notes:")}
 }
 
 // ---------------------------------------------------------------------------
-// Entry point: dispatch sessions sub-commands
+// Entry point
 // ---------------------------------------------------------------------------
 
 export async function cmdSessions(argv: string[]): Promise<void> {
   const sub = argv[0] ?? "list";
 
-  // Help flag anywhere in argv
   if (argv.includes("--help") || argv.includes("-h")) {
     sessionsHelp();
     return;
@@ -477,28 +579,28 @@ export async function cmdSessions(argv: string[]): Promise<void> {
 
   switch (sub) {
     case "list":
-      await cmdSessionsList(argv.slice(1));
+      await cmdSessionsList();
       break;
 
     case "print": {
-      // argv[1] is either an ID or a flag (--filter) or absent
-      const maybeId  = argv[1] && !argv[1].startsWith("-") ? argv[1] : undefined;
-      const restArgs = maybeId ? argv.slice(2) : argv.slice(1);
-      await cmdSessionsPrint(maybeId, restArgs);
+      const maybeId = argv[1] && !argv[1].startsWith("-") ? argv[1] : undefined;
+      await cmdSessionsPrint(maybeId);
       break;
     }
 
     case "delete": {
-      const maybeId  = argv[1] && !argv[1].startsWith("-") ? argv[1] : undefined;
-      const restArgs = maybeId ? argv.slice(2) : argv.slice(1);
-      await cmdSessionsDelete(maybeId, restArgs);
+      const maybeId = argv[1] && !argv[1].startsWith("-") ? argv[1] : undefined;
+      await cmdSessionsDelete(maybeId);
       break;
     }
 
+    case "purge":
+      await cmdSessionsPurge(argv.slice(1));
+      break;
+
     default:
-      // Treat unknown first arg as implicit "list" (e.g. `sessions --filter`)
       if (sub.startsWith("-")) {
-        await cmdSessionsList(argv);
+        await cmdSessionsList();
       } else {
         console.error(`Unknown sessions sub-command: ${sub}`);
         console.error('Run "npx code-session-memory sessions --help" for usage.');

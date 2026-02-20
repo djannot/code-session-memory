@@ -1,6 +1,6 @@
 import type { SessionInfo, FullMessage, SessionSource } from "./types";
 import type { Database } from "./database";
-import { resolveDbPath, openDatabase, getSessionMeta, upsertSessionMeta, insertChunks } from "./database";
+import { resolveDbPath, openDatabase, getSessionMeta, upsertSessionMeta, insertChunks, deleteSession } from "./database";
 import { chunkMarkdown } from "./chunker";
 import { createEmbedder } from "./embedder";
 import { messageToMarkdown } from "./session-to-md";
@@ -55,13 +55,23 @@ export async function indexNewMessages(
   const meta = getSessionMeta(db, sessionId);
   const lastIndexedId = meta?.last_indexed_message_id ?? null;
 
-  // Filter to only messages after the last indexed one
+  // Filter to only messages after the last indexed one.
+  // If lastIndexedId is set but not found in the message list, this means the
+  // ID format changed (e.g. migrating from SQLite bubble IDs to transcript line
+  // IDs). In that case, purge the existing session chunks and re-index from
+  // scratch to avoid duplicates.
   let newMessages: FullMessage[];
   if (lastIndexedId === null) {
     newMessages = messages;
   } else {
     const lastIdx = messages.findIndex((m) => m.info.id === lastIndexedId);
-    newMessages = lastIdx === -1 ? messages : messages.slice(lastIdx + 1);
+    if (lastIdx === -1) {
+      // ID not found — purge stale chunks and re-index everything
+      deleteSession(db, sessionId);
+      newMessages = messages;
+    } else {
+      newMessages = messages.slice(lastIdx + 1);
+    }
   }
 
   if (newMessages.length === 0) {
@@ -73,11 +83,28 @@ export async function indexNewMessages(
     model: options.embeddingModel,
   });
 
-  let totalChunksIndexed = 0;
+  // Single timestamp for all chunks in this indexing run — represents when
+  // the session turn was indexed (within seconds of when it was written).
+  const indexedAt = Date.now();
 
-  for (const msg of newMessages) {
+  // The first new message's position within the full session (0-based).
+  // Used to assign stable message_order values so chunks sort chronologically
+  // regardless of message ID format (works for OpenCode, Claude Code, Cursor).
+  const firstNewMessageOrder = messages.length - newMessages.length;
+
+  // --- Phase 1: render + chunk all new messages up-front ---
+  // This lets us embed everything in a single API call instead of one per message.
+  type MessageChunks = { chunks: ReturnType<typeof chunkMarkdown> };
+  const perMessage: MessageChunks[] = [];
+  const allTexts: string[] = [];
+
+  for (let i = 0; i < newMessages.length; i++) {
+    const msg = newMessages[i];
     const md = messageToMarkdown(msg);
-    if (!md.trim()) continue;
+    if (!md.trim()) {
+      perMessage.push({ chunks: [] });
+      continue;
+    }
 
     const msgUrl = `session://${sessionId}#${msg.info.id}`;
     const chunks = chunkMarkdown(md, {
@@ -87,16 +114,28 @@ export async function indexNewMessages(
       baseUrl: msgUrl,
     });
 
-    if (chunks.length === 0) continue;
+    // Stamp every chunk with the indexing time and message position
+    const messageOrder = firstNewMessageOrder + i;
+    for (const chunk of chunks) {
+      chunk.metadata.created_at = indexedAt;
+      chunk.metadata.message_order = messageOrder;
+    }
 
-    const texts = chunks.map((c) => c.content);
-    const embeddings = await embedder.embedBatch(texts);
-
-    insertChunks(db, chunks, embeddings);
-    totalChunksIndexed += chunks.length;
+    perMessage.push({ chunks });
+    allTexts.push(...chunks.map((c) => c.content));
   }
 
-  void totalChunksIndexed;
+  // --- Phase 2: embed all chunks in one batch ---
+  const allEmbeddings = allTexts.length > 0 ? await embedder.embedBatch(allTexts) : [];
+
+  // --- Phase 3: slice embeddings back per message and insert ---
+  let embeddingOffset = 0;
+  for (const { chunks } of perMessage) {
+    if (chunks.length === 0) continue;
+    const embeddings = allEmbeddings.slice(embeddingOffset, embeddingOffset + chunks.length);
+    insertChunks(db, chunks, embeddings);
+    embeddingOffset += chunks.length;
+  }
 
   // Update session meta with the last message we processed
   const lastMsg = newMessages[newMessages.length - 1];
@@ -108,6 +147,10 @@ export async function indexNewMessages(
     last_indexed_message_id: lastMsg.info.id,
     updated_at: Date.now(),
   });
+
+  // Flush WAL to the main DB file so that a subsequent status check on a
+  // separate connection sees the newly indexed data immediately.
+  db.pragma("wal_checkpoint(PASSIVE)");
 
   return { indexed: newMessages.length, skipped: messages.length - newMessages.length };
 }

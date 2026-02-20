@@ -14,13 +14,17 @@ export interface DocumentChunk {
     hash: string;
     chunk_index: number;
     total_chunks: number;
+    /** 0-based position of this message within the session (set at index time). Used for correct print ordering. */
+    message_order?: number;
+    /** Unix ms timestamp set at insert time (Date.now()). Used for date filtering. */
+    created_at?: number;
   };
 }
 
 /**
  * Which tool produced a session.
  */
-export type SessionSource = "opencode" | "claude-code";
+export type SessionSource = "opencode" | "claude-code" | "cursor";
 
 /**
  * A row in the sessions_meta table — tracks per-session indexing progress.
@@ -100,6 +104,7 @@ export interface QueryResult {
   chunk_index?: number;
   total_chunks?: number;
   source?: SessionSource;
+  created_at?: number;
 }
 
 /**

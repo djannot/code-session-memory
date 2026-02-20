@@ -95,6 +95,36 @@ function getIndexerCliClaudePath(): string {
   return path.join(getPackageRoot(), "dist", "src", "indexer-cli-claude.js");
 }
 
+function getIndexerCliCursorPath(): string {
+  return path.join(getPackageRoot(), "dist", "src", "indexer-cli-cursor.js");
+}
+
+// ---------------------------------------------------------------------------
+// Paths — Cursor
+// ---------------------------------------------------------------------------
+
+function getCursorConfigDir(): string {
+  const envDir = process.env.CURSOR_CONFIG_DIR;
+  if (envDir) return envDir;
+  return path.join(os.homedir(), ".cursor");
+}
+
+function getCursorHooksPath(): string {
+  return path.join(getCursorConfigDir(), "hooks.json");
+}
+
+function getCursorHooksScriptDir(): string {
+  return path.join(getCursorConfigDir(), "hooks");
+}
+
+function getCursorMcpConfigPath(): string {
+  return path.join(getCursorConfigDir(), "mcp.json");
+}
+
+function getCursorSkillDst(): string {
+  return path.join(getCursorConfigDir(), "skills", "code-session-memory", "SKILL.md");
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -405,6 +435,211 @@ function checkClaudeMdInstalled(): boolean {
 }
 
 // ---------------------------------------------------------------------------
+// Cursor — hook
+// ---------------------------------------------------------------------------
+
+/**
+ * Installs/updates the Cursor stop hook in ~/.cursor/hooks.json.
+ * Merges with any existing hooks — never clobbers other entries.
+ */
+function installCursorHook(indexerCliCursorPath: string): { hooksPath: string; existed: boolean } {
+  const hooksPath = getCursorHooksPath();
+  const existed = fs.existsSync(hooksPath);
+
+  let config: { version?: number; hooks?: Record<string, unknown[]> } = {};
+  if (existed) {
+    try {
+      config = JSON.parse(fs.readFileSync(hooksPath, "utf8"));
+    } catch {
+      throw new Error(`Could not parse existing ${hooksPath} — please check it is valid JSON.`);
+    }
+  }
+
+  config.version = config.version ?? 1;
+  if (!config.hooks || typeof config.hooks !== "object") config.hooks = {};
+
+  // Remove any existing code-session-memory stop hook
+  if (Array.isArray(config.hooks.stop)) {
+    config.hooks.stop = config.hooks.stop.filter((entry: unknown) => {
+      if (!entry || typeof entry !== "object") return true;
+      const e = entry as Record<string, unknown>;
+      return typeof e.command !== "string" || !e.command.includes("indexer-cli-cursor");
+    });
+  } else {
+    config.hooks.stop = [];
+  }
+
+  config.hooks.stop.push({ command: `node ${indexerCliCursorPath}` });
+
+  ensureDir(path.dirname(hooksPath));
+  fs.writeFileSync(hooksPath, JSON.stringify(config, null, 2) + "\n", "utf8");
+  return { hooksPath, existed };
+}
+
+/**
+ * Removes the code-session-memory stop hook from ~/.cursor/hooks.json.
+ */
+function uninstallCursorHook(): "done" | "not_found" {
+  const hooksPath = getCursorHooksPath();
+  if (!fs.existsSync(hooksPath)) return "not_found";
+  try {
+    const config = JSON.parse(fs.readFileSync(hooksPath, "utf8")) as {
+      version?: number;
+      hooks?: Record<string, unknown[]>;
+    };
+    const stop = config.hooks?.stop;
+    if (!Array.isArray(stop)) return "not_found";
+
+    const before = stop.length;
+    config.hooks!.stop = stop.filter((entry: unknown) => {
+      if (!entry || typeof entry !== "object") return true;
+      const e = entry as Record<string, unknown>;
+      return typeof e.command !== "string" || !e.command.includes("indexer-cli-cursor");
+    });
+
+    if (config.hooks!.stop.length === before) return "not_found";
+    fs.writeFileSync(hooksPath, JSON.stringify(config, null, 2) + "\n", "utf8");
+    return "done";
+  } catch {
+    return "not_found";
+  }
+}
+
+function checkCursorHookInstalled(): boolean {
+  const hooksPath = getCursorHooksPath();
+  try {
+    const config = JSON.parse(fs.readFileSync(hooksPath, "utf8")) as {
+      hooks?: Record<string, unknown[]>;
+    };
+    const stop = config.hooks?.stop;
+    if (!Array.isArray(stop)) return false;
+    return stop.some((entry: unknown) => {
+      if (!entry || typeof entry !== "object") return false;
+      const e = entry as Record<string, unknown>;
+      return typeof e.command === "string" && e.command.includes("indexer-cli-cursor");
+    });
+  } catch { return false; }
+}
+
+// ---------------------------------------------------------------------------
+// Cursor — MCP config
+// ---------------------------------------------------------------------------
+
+/**
+ * Merges the code-session-memory MCP entry into ~/.cursor/mcp.json.
+ */
+function installCursorMcpConfig(mcpServerPath: string): { configPath: string; existed: boolean } {
+  const configPath = getCursorMcpConfigPath();
+  const existed = fs.existsSync(configPath);
+
+  let config: Record<string, unknown> = {};
+  if (existed) {
+    try {
+      config = JSON.parse(fs.readFileSync(configPath, "utf8"));
+    } catch {
+      throw new Error(`Could not parse existing ${configPath} — please check it is valid JSON.`);
+    }
+  }
+
+  if (!config.mcpServers || typeof config.mcpServers !== "object") config.mcpServers = {};
+  (config.mcpServers as Record<string, unknown>)["code-session-memory"] = {
+    command: "node",
+    args: [mcpServerPath],
+    env: {},
+  };
+
+  ensureDir(path.dirname(configPath));
+  fs.writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n", "utf8");
+  return { configPath, existed };
+}
+
+/**
+ * Removes the code-session-memory MCP entry from ~/.cursor/mcp.json.
+ */
+function uninstallCursorMcpConfig(): "done" | "not_found" {
+  const configPath = getCursorMcpConfigPath();
+  if (!fs.existsSync(configPath)) return "not_found";
+  try {
+    const config = JSON.parse(fs.readFileSync(configPath, "utf8")) as Record<string, unknown>;
+    if (
+      config.mcpServers &&
+      typeof config.mcpServers === "object" &&
+      "code-session-memory" in (config.mcpServers as object)
+    ) {
+      delete (config.mcpServers as Record<string, unknown>)["code-session-memory"];
+      fs.writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n", "utf8");
+      return "done";
+    }
+    return "not_found";
+  } catch {
+    return "not_found";
+  }
+}
+
+function checkCursorMcpConfigured(): boolean {
+  const configPath = getCursorMcpConfigPath();
+  try {
+    const config = JSON.parse(fs.readFileSync(configPath, "utf8")) as Record<string, unknown>;
+    return !!(
+      config.mcpServers &&
+      typeof config.mcpServers === "object" &&
+      "code-session-memory" in (config.mcpServers as object)
+    );
+  } catch { return false; }
+}
+
+// ---------------------------------------------------------------------------
+// Cursor — skill
+// ---------------------------------------------------------------------------
+
+/**
+ * Copies the shared skill file to ~/.cursor/skills/code-session-memory/SKILL.md,
+ * prepending Cursor-compatible YAML frontmatter.
+ */
+function installCursorSkill(skillSrc: string): { dstPath: string; existed: boolean } {
+  const dstPath = getCursorSkillDst();
+  const existed = fs.existsSync(dstPath);
+
+  if (!fs.existsSync(skillSrc)) {
+    throw new Error(`Skill source not found: ${skillSrc}\nDid you run "npm run build" first?`);
+  }
+
+  const skillBody = fs.readFileSync(skillSrc, "utf8");
+
+  // Strip any existing frontmatter (--- ... ---) before adding Cursor's
+  const bodyWithoutFrontmatter = skillBody
+    .replace(/^---[\s\S]*?---\s*\n?/, "")
+    .trimStart();
+
+  const cursorFrontmatter = [
+    "---",
+    "name: code-session-memory",
+    "description: Search past AI coding sessions semantically across OpenCode, Claude Code, and Cursor. Use this when the user asks about past work, decisions, or implementations.",
+    "---",
+    "",
+  ].join("\n");
+
+  ensureDir(path.dirname(dstPath));
+  fs.writeFileSync(dstPath, cursorFrontmatter + bodyWithoutFrontmatter, "utf8");
+  return { dstPath, existed };
+}
+
+/**
+ * Removes the code-session-memory skill from ~/.cursor/skills/.
+ */
+function uninstallCursorSkill(): "done" | "not_found" {
+  const dstPath = getCursorSkillDst();
+  if (!fs.existsSync(dstPath)) return "not_found";
+  fs.unlinkSync(dstPath);
+  // Remove the directory if empty
+  try {
+    const dir = path.dirname(dstPath);
+    if (fs.readdirSync(dir).length === 0) fs.rmdirSync(dir);
+  } catch { /* ignore */ }
+  return "done";
+}
+
+// ---------------------------------------------------------------------------
 // Formatting helpers
 // ---------------------------------------------------------------------------
 
@@ -436,6 +671,7 @@ function install(): void {
   const dbPath = resolveDbPath();
   const mcpPath = getMcpServerPath();
   const indexerClaudePath = getIndexerCliClaudePath();
+  const indexerCursorPath = getIndexerCliCursorPath();
 
   // 1. DB
   step("Initialising database", () => {
@@ -483,6 +719,24 @@ function install(): void {
     return `${existed ? "updated" : "created"} ${mdPath}`;
   });
 
+  // 8. Cursor MCP config
+  step("Configuring Cursor MCP server", () => {
+    const { configPath, existed } = installCursorMcpConfig(mcpPath);
+    return `${existed ? "updated" : "created"} ${configPath}`;
+  });
+
+  // 9. Cursor stop hook
+  step("Installing Cursor stop hook", () => {
+    const { hooksPath, existed } = installCursorHook(indexerCursorPath);
+    return `${existed ? "updated" : "created"} ${hooksPath}`;
+  });
+
+  // 10. Cursor skill
+  step("Installing Cursor skill", () => {
+    const { dstPath, existed } = installCursorSkill(getSkillSrc());
+    return `${existed ? "updated" : "created"} ${dstPath}`;
+  });
+
   console.log(`
 ${bold("Installation complete!")}
 
@@ -491,7 +745,7 @@ ${bold("Required environment variable:")}
 
 ${bold("Default DB path:")} ${dbPath}
 
-Restart ${bold("OpenCode")} and ${bold("Claude Code")} to activate.
+Restart ${bold("OpenCode")}, ${bold("Claude Code")}, and ${bold("Cursor")} to activate.
 Run ${bold("npx code-session-memory status")} to verify.
 `);
 }
@@ -512,6 +766,11 @@ function status(): void {
   console.log(`  ${ok(checkClaudeHookInstalled())}  Stop hook   ${dim(getClaudeSettingsPath())}`);
   console.log(`  ${ok(checkClaudeMdInstalled())}  CLAUDE.md   ${dim(getClaudeMdPath())}`);
 
+  console.log(bold("\n  Cursor"));
+  console.log(`  ${ok(checkCursorMcpConfigured())}  MCP config  ${dim(getCursorMcpConfigPath())}`);
+  console.log(`  ${ok(checkCursorHookInstalled())}  Stop hook   ${dim(getCursorHooksPath())}`);
+  console.log(`  ${ok(fs.existsSync(getCursorSkillDst()))}  Skill       ${dim(getCursorSkillDst())}`);
+
   console.log(bold("\n  Shared"));
   console.log(`  ${ok(fs.existsSync(mcpPath))}  MCP server  ${dim(mcpPath)}`);
   console.log(`  ${ok(fs.existsSync(dbPath))}  Database    ${dim(dbPath)}`);
@@ -525,7 +784,12 @@ function status(): void {
         "SELECT source, COUNT(*) as n FROM sessions_meta GROUP BY source"
       ).all() as Array<{ source: string; n: number }>;
       db.close();
-      console.log(`\n  ${dim("Indexed chunks:   ")}${chunks}`);
+      const dbBytes = fs.statSync(dbPath).size;
+      const dbSize = dbBytes >= 1_048_576
+        ? `${(dbBytes / 1_048_576).toFixed(1)} MB`
+        : `${(dbBytes / 1_024).toFixed(1)} KB`;
+      console.log(`\n  ${dim("DB size:          ")}${dbSize}`);
+      console.log(`  ${dim("Indexed chunks:   ")}${chunks}`);
       console.log(`  ${dim("Sessions tracked: ")}${sessions}`);
       for (const row of bySource) {
         console.log(`    ${dim(`${row.source}:`)} ${row.n}`);
@@ -539,6 +803,9 @@ function status(): void {
     checkClaudeMcpConfigured() &&
     checkClaudeHookInstalled() &&
     checkClaudeMdInstalled() &&
+    checkCursorMcpConfigured() &&
+    checkCursorHookInstalled() &&
+    fs.existsSync(getCursorSkillDst()) &&
     fs.existsSync(mcpPath) &&
     fs.existsSync(dbPath);
 
@@ -573,6 +840,15 @@ function uninstall(): void {
     }],
     ["Claude Code CLAUDE.md", () => {
       if (uninstallClaudeMd() === "not_found") throw new Error("not found");
+    }],
+    ["Cursor MCP config", () => {
+      if (uninstallCursorMcpConfig() === "not_found") throw new Error("not found");
+    }],
+    ["Cursor stop hook", () => {
+      if (uninstallCursorHook() === "not_found") throw new Error("not found");
+    }],
+    ["Cursor skill", () => {
+      if (uninstallCursorSkill() === "not_found") throw new Error("not found");
     }],
   ];
 
@@ -638,24 +914,26 @@ async function resetDb(): Promise<void> {
 
 function help(): void {
   console.log(`
-${bold("code-session-memory")} — Shared vector memory for OpenCode and Claude Code sessions
+${bold("code-session-memory")} — Shared vector memory for OpenCode, Claude Code, and Cursor sessions
 
 ${bold("Usage:")}
-  npx code-session-memory install              Install all components (OpenCode + Claude Code)
-  npx code-session-memory status               Show installation status and DB stats
-  npx code-session-memory uninstall            Remove all installed components (keeps DB)
-  npx code-session-memory reset-db             Delete all indexed data (keeps installation)
-  npx code-session-memory sessions             Browse sessions interactively
-  npx code-session-memory sessions --filter    Browse with source/date filter step
-  npx code-session-memory sessions print <id>  Print all chunks of a session to stdout
-  npx code-session-memory sessions delete <id> Delete a session from the DB
-  npx code-session-memory help                 Show this help
+  npx code-session-memory install                         Install all components (OpenCode + Claude Code + Cursor)
+  npx code-session-memory status                          Show installation status and DB stats
+  npx code-session-memory uninstall                       Remove all installed components (keeps DB)
+  npx code-session-memory reset-db                        Delete all indexed data (keeps installation)
+  npx code-session-memory sessions                        Browse sessions (tree: source → date → session)
+  npx code-session-memory sessions print <id>             Print all chunks of a session to stdout
+  npx code-session-memory sessions delete <id>            Delete a session from the DB
+  npx code-session-memory sessions purge --days <n>       Delete sessions older than N days (interactive)
+  npx code-session-memory sessions purge --days <n> --yes Delete sessions older than N days (no prompt)
+  npx code-session-memory help                            Show this help
 
 ${bold("Environment variables:")}
   OPENAI_API_KEY            Required for embedding generation
   OPENCODE_MEMORY_DB_PATH   Override the default DB path
   OPENCODE_CONFIG_DIR       Override the OpenCode config directory
   CLAUDE_CONFIG_DIR         Override the Claude Code config directory
+  CURSOR_CONFIG_DIR         Override the Cursor config directory (~/.cursor)
 `);
 }
 

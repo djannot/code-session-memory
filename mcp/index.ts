@@ -89,8 +89,10 @@ const server = new McpServer({
 const querySessionsSchema = {
   queryText: z.string().min(1).describe("Natural language description of what you are looking for."),
   project: z.string().optional().describe("Filter results to a specific project directory path (e.g. '/Users/me/myproject'). Optional."),
-  source: z.enum(["opencode", "claude-code"]).optional().describe("Filter results by tool source: 'opencode' or 'claude-code'. Optional — omit to search across both."),
+  source: z.enum(["opencode", "claude-code", "cursor"]).optional().describe("Filter results by tool source: 'opencode', 'claude-code', or 'cursor'. Optional — omit to search across all."),
   limit: z.number().int().min(1).optional().describe("Maximum number of results to return. Defaults to 5."),
+  fromDate: z.string().optional().describe("Return only chunks indexed on or after this date. ISO 8601 format, e.g. '2026-02-01' or '2026-02-20T15:00:00Z'. Optional."),
+  toDate: z.string().optional().describe("Return only chunks indexed on or before this date. ISO 8601 format, e.g. '2026-02-20'. A date-only value is treated as end-of-day UTC. Optional."),
 };
 
 const getSessionChunksSchema = {
@@ -107,8 +109,25 @@ serverAny.tool(
   "query_sessions",
   "Semantically search across all indexed sessions stored in the vector database. Returns the most relevant chunks from past sessions. Sessions from both OpenCode and Claude Code are indexed into the same shared database.",
   querySessionsSchema,
-  async (args: { queryText: string; project?: string; source?: string; limit?: number }) =>
-    querySessionsHandler({ ...args, limit: args.limit ?? 5 }),
+  async (args: { queryText: string; project?: string; source?: string; limit?: number; fromDate?: string; toDate?: string }) => {
+    // Parse ISO 8601 date strings into unix milliseconds.
+    // For toDate, a date-only string (no time component) is treated as end-of-day UTC
+    // by adding 86399999ms (23:59:59.999).
+    let fromMs: number | undefined;
+    let toMs: number | undefined;
+    if (args.fromDate) {
+      const t = new Date(args.fromDate).getTime();
+      if (!Number.isNaN(t)) fromMs = t;
+    }
+    if (args.toDate) {
+      const t = new Date(args.toDate).getTime();
+      if (!Number.isNaN(t)) {
+        // If the value is a date-only string (no 'T' separator), bump to end-of-day
+        toMs = args.toDate.includes("T") ? t : t + 86399999;
+      }
+    }
+    return querySessionsHandler({ ...args, limit: args.limit ?? 5, fromMs, toMs });
+  },
 );
 
 serverAny.tool(

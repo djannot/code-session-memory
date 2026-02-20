@@ -15,8 +15,10 @@ Semantically search across all indexed sessions to find past conversations, deci
 **Parameters:**
 - `queryText` *(required)*: A natural language description of what you are looking for.
 - `project` *(optional)*: Filter results to a specific project directory path (e.g. `"/Users/me/myproject"`).
-- `source` *(optional)*: Filter by tool — `"opencode"` or `"claude-code"`. Omit to search across both.
+- `source` *(optional)*: Filter by tool — `"opencode"`, `"claude-code"`, or `"cursor"`. Omit to search across all.
 - `limit` *(optional, default 5)*: Number of results to return (1–20).
+- `fromDate` *(optional)*: Return only chunks indexed on or after this date. ISO 8601, e.g. `"2026-02-01"` or `"2026-02-20T15:00:00Z"`.
+- `toDate` *(optional)*: Return only chunks indexed on or before this date. ISO 8601, e.g. `"2026-02-20"`. Date-only values are treated as end-of-day UTC.
 
 ### `get_session_chunks`
 
@@ -49,13 +51,16 @@ query_sessions("dark mode toggle", project="/Users/me/myapp", source="opencode")
 # Search only Claude Code sessions
 query_sessions("sqlite migration", source="claude-code")
 
+# Search sessions from a specific date range
+query_sessions("authentication middleware", fromDate="2026-02-01", toDate="2026-02-20")
+
 # Get more context from a specific result
 get_session_chunks("session://ses_abc123#msg_def456")
 ```
 
 ## Notes
 
-- Sessions from both OpenCode and Claude Code are indexed into the **same** database.
+- Sessions from OpenCode, Claude Code, and Cursor are indexed into the **same** database.
 - Indexing is automatic — no manual action needed.
 - The database lives at `~/.local/share/code-session-memory/sessions.db`.
 - Embeddings use OpenAI `text-embedding-3-large` (3072 dimensions).

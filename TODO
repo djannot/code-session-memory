@@ -1,0 +1,3 @@
+add size of the db to status
+add the ability to delete all sessions older than x days
+query mcp with date option

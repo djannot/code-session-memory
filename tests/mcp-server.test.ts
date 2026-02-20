@@ -172,6 +172,28 @@ describe("createToolHandlers", () => {
         expect.any(Number),
         "/my/project",
         undefined,
+        undefined,
+        undefined,
+      );
+    });
+
+    it("passes fromMs and toMs to querySessions", async () => {
+      const querySessions = vi.fn().mockResolvedValue([]);
+      const handlers = createToolHandlers({
+        createEmbedding: mockEmbedding,
+        querySessions,
+        getSessionChunks: vi.fn().mockResolvedValue([]),
+      });
+      const fromMs = new Date("2026-02-01").getTime();
+      const toMs = new Date("2026-02-20").getTime() + 86399999;
+      await handlers.querySessionsHandler({ queryText: "test", fromMs, toMs });
+      expect(querySessions).toHaveBeenCalledWith(
+        expect.any(Array),
+        expect.any(Number),
+        undefined,
+        undefined,
+        fromMs,
+        toMs,
       );
     });
 

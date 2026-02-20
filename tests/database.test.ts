@@ -9,6 +9,7 @@ import {
   queryByEmbedding,
   getChunksByUrl,
   listSessionUrls,
+  getSessionChunksOrdered,
   resolveDbPath,
 } from "../src/database";
 import type { DocumentChunk, SessionMeta } from "../src/types";
@@ -40,6 +41,7 @@ function makeChunk(overrides: Partial<DocumentChunk["metadata"]> = {}): Document
       hash: "abc123",
       chunk_index: 0,
       total_chunks: 1,
+      message_order: 0,
       ...overrides,
     },
   };
@@ -407,5 +409,34 @@ describe("listSessionUrls", () => {
   it("returns empty array for unknown session", () => {
     const db = createTestDb();
     expect(listSessionUrls(db as Parameters<typeof listSessionUrls>[0], "ses_unknown")).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// getSessionChunksOrdered
+// ---------------------------------------------------------------------------
+
+describe("getSessionChunksOrdered", () => {
+  it("returns chunks ordered by message_order then chunk_index", () => {
+    const db = createTestDb();
+    // Insert chunks out of order to verify sort is applied
+    // msg_b is message_order=0, msg_a is message_order=1 — but inserted in reverse
+    insertChunks(
+      db as Parameters<typeof insertChunks>[0],
+      [
+        makeChunk({ chunk_id: "a0", url: "session://ses_001#msg_a", chunk_index: 0, total_chunks: 2, message_order: 1 }),
+        makeChunk({ chunk_id: "a1", url: "session://ses_001#msg_a", chunk_index: 1, total_chunks: 2, message_order: 1 }),
+        makeChunk({ chunk_id: "b0", url: "session://ses_001#msg_b", chunk_index: 0, total_chunks: 1, message_order: 0 }),
+      ],
+      [makeEmbedding(), makeEmbedding(), makeEmbedding()],
+    );
+
+    const rows = getSessionChunksOrdered(db as Parameters<typeof getSessionChunksOrdered>[0], "ses_001");
+    expect(rows.map((r) => r.chunk_id)).toEqual(["b0", "a0", "a1"]);
+  });
+
+  it("returns empty array for unknown session", () => {
+    const db = createTestDb();
+    expect(getSessionChunksOrdered(db as Parameters<typeof getSessionChunksOrdered>[0], "ses_unknown")).toEqual([]);
   });
 });

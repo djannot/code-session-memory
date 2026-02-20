@@ -63,6 +63,8 @@ export function createSqliteProvider(deps: {
     topK = 10,
     projectFilter?: string,
     sourceFilter?: string,
+    fromMs?: number,
+    toMs?: number,
   ): Promise<QueryResult[]> {
     return withDb((db) => {
       let sql = `
@@ -70,7 +72,7 @@ export function createSqliteProvider(deps: {
           SELECT
             chunk_id, content, url, section, heading_hierarchy,
             chunk_index, total_chunks, session_id, session_title, project,
-            distance
+            distance, created_at
           FROM vec_items
           WHERE embedding MATCH ?
             AND k = ?
@@ -90,6 +92,16 @@ export function createSqliteProvider(deps: {
       if (sourceFilter) {
         sql += " AND m.source = ?";
         params.push(sourceFilter);
+      }
+
+      if (typeof fromMs === "number") {
+        sql += " AND knn.created_at >= ?";
+        params.push(BigInt(fromMs));
+      }
+
+      if (typeof toMs === "number") {
+        sql += " AND knn.created_at <= ?";
+        params.push(BigInt(toMs));
       }
 
       sql += " ORDER BY distance";
@@ -145,6 +157,8 @@ export function createToolHandlers(deps: {
     topK: number,
     project?: string,
     source?: string,
+    fromMs?: number,
+    toMs?: number,
   ) => Promise<QueryResult[]>;
   getSessionChunks: (
     url: string,
@@ -161,6 +175,8 @@ export function createToolHandlers(deps: {
     project?: string;
     source?: string;
     limit?: number;
+    fromMs?: number;
+    toMs?: number;
   }) => {
     const limit = args.limit ?? 5;
     console.error(
@@ -169,7 +185,7 @@ export function createToolHandlers(deps: {
 
     try {
       const embedding = await createEmbedding(args.queryText);
-      const results = await querySessions(embedding, limit, args.project, args.source);
+      const results = await querySessions(embedding, limit, args.project, args.source, args.fromMs, args.toMs);
 
       if (results.length === 0) {
         return {

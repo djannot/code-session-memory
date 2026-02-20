@@ -1,0 +1,5 @@
+{"role":"user","message":{"content":[{"type":"text","text":"<user_query>\n\nRead a file\n</user_query>"}]}}
+{"role":"assistant","message":{"content":[{"type":"text","text":"Checking the project structure."}]}}
+{"role":"assistant","message":{"content":[{"type":"text","text":"There's no such file. Which one do you want?"}]}}
+{"role":"user","message":{"content":[{"type":"text","text":"<user_query>\n\nRead another one\n</user_query>"}]}}
+{"role":"assistant","message":{"content":[{"type":"text","text":"Here are two files from the project."}]}}

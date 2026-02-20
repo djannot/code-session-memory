@@ -101,7 +101,9 @@ export function initSchema(db: Database, embeddingDimension = DEFAULT_EMBEDDING_
       url               TEXT,
       hash              TEXT,
       chunk_index       INTEGER,
-      total_chunks      INTEGER
+      total_chunks      INTEGER,
+      message_order     INTEGER,
+      created_at        INTEGER
     );
   `);
 
@@ -180,11 +182,11 @@ export function insertChunks(
     INSERT INTO vec_items (
       embedding, session_id, session_title, project,
       heading_hierarchy, section, chunk_id, content, url, hash,
-      chunk_index, total_chunks
+      chunk_index, total_chunks, message_order, created_at
     ) VALUES (
       ?, ?, ?, ?,
       ?, ?, ?, ?, ?, ?,
-      ?, ?
+      ?, ?, ?, ?
     )
   `);
 
@@ -213,6 +215,8 @@ export function insertChunks(
         m.hash,
         BigInt(m.chunk_index),
         BigInt(m.total_chunks),
+        BigInt(m.message_order ?? 0),
+        BigInt(m.created_at ?? Date.now()),
       );
     }
   });
@@ -230,6 +234,8 @@ export function queryByEmbedding(
   topK = 10,
   projectFilter?: string,
   sourceFilter?: SessionSource,
+  fromMs?: number,
+  toMs?: number,
 ): QueryResult[] {
   // sqlite-vec requires the LIMIT (k) constraint to be part of the KNN WHERE
   // clause. We use a CTE to perform the KNN first, then join sessions_meta for
@@ -239,7 +245,7 @@ export function queryByEmbedding(
       SELECT
         chunk_id, content, url, section, heading_hierarchy,
         chunk_index, total_chunks, session_id, session_title, project,
-        distance
+        distance, created_at
       FROM vec_items
       WHERE embedding MATCH ?
         AND k = ?
@@ -259,6 +265,16 @@ export function queryByEmbedding(
   if (sourceFilter) {
     sql += " AND m.source = ?";
     params.push(sourceFilter);
+  }
+
+  if (typeof fromMs === "number") {
+    sql += " AND knn.created_at >= ?";
+    params.push(BigInt(fromMs));
+  }
+
+  if (typeof toMs === "number") {
+    sql += " AND knn.created_at <= ?";
+    params.push(BigInt(toMs));
   }
 
   sql += " ORDER BY distance";
@@ -371,14 +387,17 @@ export interface ChunkRow {
 }
 
 /**
- * Returns all chunks for a session ordered by chunk_index ASC.
+ * Returns all chunks for a session ordered by message_order ASC, chunk_index ASC.
+ * message_order is the 0-based position of the message within the session at
+ * index time — stable and source-agnostic (works for OpenCode, Claude Code,
+ * and Cursor whose message IDs are not guaranteed to sort chronologically).
  */
 export function getSessionChunksOrdered(db: Database, sessionId: string): ChunkRow[] {
   return db.prepare(`
     SELECT chunk_id, chunk_index, total_chunks, section, heading_hierarchy, content, url
     FROM vec_items
     WHERE session_id = ?
-    ORDER BY chunk_index ASC
+    ORDER BY message_order ASC, chunk_index ASC
   `).all(sessionId) as ChunkRow[];
 }
 
@@ -398,4 +417,30 @@ export function deleteSession(db: Database, sessionId: string): number {
   })();
 
   return chunkCount;
+}
+
+/**
+ * Deletes all sessions last updated before `olderThanMs` (unix milliseconds).
+ * Returns the number of sessions and chunks removed.
+ */
+export function deleteSessionsOlderThan(
+  db: Database,
+  olderThanMs: number,
+): { sessions: number; chunks: number } {
+  const candidates = listSessions(db, { toDate: olderThanMs });
+  if (candidates.length === 0) return { sessions: 0, chunks: 0 };
+
+  const deleteChunks = db.prepare("DELETE FROM vec_items WHERE session_id = ?");
+  const deleteMeta   = db.prepare("DELETE FROM sessions_meta WHERE session_id = ?");
+
+  let totalChunks = 0;
+  db.transaction(() => {
+    for (const s of candidates) {
+      const result = deleteChunks.run(s.session_id);
+      totalChunks += result.changes;
+      deleteMeta.run(s.session_id);
+    }
+  })();
+
+  return { sessions: candidates.length, chunks: totalChunks };
 }

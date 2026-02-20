@@ -15,17 +15,22 @@ import { indexNewMessagesWithOptions as indexNewMessages, reindexSession } from 
 
 const EMBEDDING_DIM = 3072;
 
+// vi.mock is hoisted to the top of the file, so the spy must also be hoisted
+// via vi.hoisted() to be accessible inside the factory.
+const { embedBatchSpy } = vi.hoisted(() => {
+  const embedBatchSpy = vi.fn().mockImplementation(async (texts: string[]) =>
+    texts.map(() => Array(EMBEDDING_DIM).fill(0.1)),
+  );
+  return { embedBatchSpy };
+});
+
 // Mock the embedder module before importing indexer
 vi.mock("../src/embedder", () => ({
   createEmbedder: () => ({
     embedText: vi.fn().mockResolvedValue(Array(EMBEDDING_DIM).fill(0.1)),
-    embedBatch: vi.fn().mockImplementation(async (texts: string[]) =>
-      texts.map(() => Array(EMBEDDING_DIM).fill(0.1)),
-    ),
+    embedBatch: embedBatchSpy,
   }),
-  embedBatch: vi.fn().mockImplementation(async (texts: string[]) =>
-    texts.map(() => Array(EMBEDDING_DIM).fill(0.1)),
-  ),
+  embedBatch: embedBatchSpy,
 }));
 
 // Mock the database module to use a temp file
@@ -70,6 +75,21 @@ function makeMessages(count: number, startIndex = 0): FullMessage[] {
 // ---------------------------------------------------------------------------
 
 describe("indexNewMessages", () => {
+  beforeEach(() => {
+    embedBatchSpy.mockClear();
+  });
+
+  it("calls embedBatch exactly once regardless of message count", async () => {
+    const dbPath = makeTempDbPath();
+    const messages = makeMessages(5);
+    await indexNewMessages(makeSession(), messages, "opencode", { dbPath });
+    // All chunks from all 5 messages should be embedded in a single call
+    expect(embedBatchSpy).toHaveBeenCalledTimes(1);
+    // The single call should receive all chunks combined (≥5 texts, one per chunk)
+    const [allTexts] = embedBatchSpy.mock.calls[0] as [string[]];
+    expect(allTexts.length).toBeGreaterThanOrEqual(5);
+  });
+
   it("returns {indexed:0, skipped:0} for empty messages", async () => {
     const dbPath = makeTempDbPath();
     const result = await indexNewMessages(makeSession(), [], "opencode", { dbPath });

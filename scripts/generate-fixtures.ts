@@ -13,9 +13,10 @@
  * Requirements:
  *   - `claude` CLI available in PATH (Claude Code)
  *   - `opencode` CLI available in PATH
+ *   - Cursor state.vscdb must exist (for Cursor fixtures)
  */
 
-import { execSync, spawnSync } from "child_process";
+import { spawnSync } from "child_process";
 import fs from "fs";
 import os from "os";
 import path from "path";
@@ -200,6 +201,112 @@ async function generateOpenCodeFixtures(): Promise<string> {
 }
 
 // ---------------------------------------------------------------------------
+// Cursor fixtures
+// ---------------------------------------------------------------------------
+
+/**
+ * Reads the Cursor state.vscdb and snapshots a known composer session as JSON.
+ *
+ * Because Cursor has no CLI that programmatically runs a session, we rely on
+ * a real session that already exists in the user's Cursor DB. The composerId
+ * is looked up from the manifest if present (cursor_composer_id), or we pick
+ * the most-recently-updated composer.
+ */
+async function generateCursorFixtures(
+  existingComposerId?: string,
+): Promise<{ composerId: string }> {
+  console.log("\n=== Cursor fixtures ===");
+
+  // Dynamically import cursor-to-messages so tsx can handle it without a build step
+  const cursorModule = await import("../src/cursor-to-messages");
+  const {
+    resolveCursorDbPath,
+    openCursorDb,
+    listComposerIds,
+    getComposerData,
+    cursorSessionToMessages,
+  } = cursorModule;
+
+  const dbPath = resolveCursorDbPath();
+  console.log(`  Cursor DB: ${dbPath}`);
+
+  if (!fs.existsSync(dbPath)) {
+    throw new Error(`Cursor state.vscdb not found at: ${dbPath}`);
+  }
+
+  const db = openCursorDb(dbPath);
+
+  let composerId: string;
+
+  try {
+    if (existingComposerId) {
+      // Verify it still exists
+      const composer = getComposerData(db, existingComposerId);
+      if (composer) {
+        composerId = existingComposerId;
+        console.log(`  Using existing composerId: ${composerId}`);
+      } else {
+        console.warn(`  Existing composerId not found: ${existingComposerId}, picking most recent`);
+        const ids = listComposerIds(db);
+        if (ids.length === 0) throw new Error("No Cursor sessions found in state.vscdb");
+        composerId = ids[0];
+      }
+    } else {
+      // Pick the most recently-updated session with at least one user message
+      const ids = listComposerIds(db);
+      if (ids.length === 0) throw new Error("No Cursor sessions found in state.vscdb");
+      composerId = ids[0];
+    }
+
+    console.log(`  composerId: ${composerId}`);
+
+    const composer = getComposerData(db, composerId);
+    if (!composer) throw new Error(`composerData not found for: ${composerId}`);
+
+    const messages = cursorSessionToMessages(db, composerId);
+    console.log(`  messages: ${messages.length}`);
+
+    if (messages.length === 0) {
+      throw new Error("Selected Cursor session has no messages — pick a different session");
+    }
+
+    // Full session fixture
+    const sessionFixture = {
+      composerId,
+      name: composer.name ?? "",
+      messages,
+    };
+    writeJson(path.join(FIXTURES_DIR, "cursor-session.json"), sessionFixture);
+
+    // Turn-1 fixture: just the first user + next AI message(s) up to (but not
+    // including) the second user message
+    let turn1End = messages.length;
+    let userCount = 0;
+    for (let i = 0; i < messages.length; i++) {
+      if (messages[i].info.role === "user") {
+        userCount++;
+        if (userCount === 2) {
+          turn1End = i;
+          break;
+        }
+      }
+    }
+    const turn1Fixture = {
+      composerId,
+      name: composer.name ?? "",
+      messages: messages.slice(0, turn1End),
+    };
+    writeJson(path.join(FIXTURES_DIR, "cursor-turn1.json"), turn1Fixture);
+
+    console.log(`  turn1: ${turn1Fixture.messages.length} messages, full: ${messages.length} messages`);
+  } finally {
+    db.close();
+  }
+
+  return { composerId };
+}
+
+// ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
 
@@ -211,8 +318,18 @@ async function main() {
 
   fs.mkdirSync(FIXTURES_DIR, { recursive: true });
 
+  // Read existing manifest to reuse IDs where possible
+  const manifestPath = path.join(FIXTURES_DIR, "manifest.json");
+  let existingManifest: Record<string, string> = {};
+  if (fs.existsSync(manifestPath)) {
+    try {
+      existingManifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+    } catch { /* ignore */ }
+  }
+
   let claudeSessionId = "";
   let openCodeSessionId = "";
+  let cursorComposerId = "";
 
   try {
     claudeSessionId = await generateClaudeFixtures();
@@ -228,12 +345,21 @@ async function main() {
     process.exit(1);
   }
 
+  try {
+    const result = await generateCursorFixtures(existingManifest.cursor_composer_id);
+    cursorComposerId = result.composerId;
+  } catch (err) {
+    console.error("\nFailed to generate Cursor fixtures:", err);
+    process.exit(1);
+  }
+
   // Write manifest
   const manifest = {
     generated_at: new Date().toISOString(),
     claude_session_id: claudeSessionId,
     claude_project_dir: claudeProjectDir(),
     opencode_session_id: openCodeSessionId,
+    cursor_composer_id: cursorComposerId,
   };
   writeJson(path.join(FIXTURES_DIR, "manifest.json"), manifest);
 

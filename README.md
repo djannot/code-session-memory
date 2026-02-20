@@ -1,30 +1,30 @@
 # code-session-memory
 
-Automatic vector memory for [OpenCode](https://opencode.ai) and [Claude Code](https://claude.ai/code) sessions — shared across both tools.
+Automatic vector memory for [OpenCode](https://opencode.ai), [Claude Code](https://claude.ai/code), and [Cursor](https://www.cursor.com) sessions — shared across all three tools.
 
-Every time the AI agent finishes its turn, `code-session-memory` automatically indexes the new messages into a local [sqlite-vec](https://github.com/asg017/sqlite-vec) vector database. Past sessions become semantically searchable — both by the AI agent (via the MCP server) and by you. Sessions from both OpenCode and Claude Code are stored in the **same database**, so memory is shared across tools.
+Every time the AI agent finishes its turn, `code-session-memory` automatically indexes the new messages into a local [sqlite-vec](https://github.com/asg017/sqlite-vec) vector database. Past sessions become semantically searchable — both by the AI agent (via the MCP server) and by you. Sessions from OpenCode, Claude Code, and Cursor are stored in the **same database**, so memory is shared across tools.
 
 ## How it works
 
 ```
-OpenCode (session.idle event)          Claude Code (Stop hook)
-        │                                       │
-        │  fetches messages via REST API        │  reads JSONL transcript
-        ▼                                       ▼
-session-to-md                        transcript-to-messages
-        │                                       │
-        └───────────────┬───────────────────────┘
-                        ▼
-             chunker  →  heading-aware chunks (≤1000 tokens, 10% overlap)
-                        │
-                        ▼
-             embedder  →  OpenAI text-embedding-3-large (3072 dims)
-                        │
-                        ▼
-             sqlite-vec DB  →  ~/.local/share/code-session-memory/sessions.db
-                        │
-                        ▼
-             MCP server  →  query_sessions / get_session_chunks tools
+OpenCode (session.idle)    Claude Code (Stop hook)    Cursor (stop hook)
+        │                           │                        │
+        │  REST API messages        │  JSONL transcript      │  JSONL transcript
+        ▼                           ▼                        ▼
+session-to-md          transcript-to-messages   cursor-transcript-to-messages
+        │                           │                        │
+        └───────────────────────────┬────────────────────────┘
+                                    ▼
+                         chunker  →  heading-aware chunks (≤1000 tokens, 10% overlap)
+                                    │
+                                    ▼
+                         embedder  →  OpenAI text-embedding-3-large (3072 dims)
+                                    │    (all chunks batched in a single API call per turn)
+                                    ▼
+                         sqlite-vec DB  →  ~/.local/share/code-session-memory/sessions.db
+                                    │
+                                    ▼
+                         MCP server  →  query_sessions / get_session_chunks tools
 ```
 
 Only **new messages** are indexed on each turn — previously indexed messages are skipped (tracked via `sessions_meta` table). This makes each indexing pass fast, even in long sessions.
@@ -35,7 +35,7 @@ Only **new messages** are indexed on each turn — previously indexed messages a
 
 - Node.js ≥ 18
 - An OpenAI API key (for `text-embedding-3-large`)
-- OpenCode and/or Claude Code installed
+- OpenCode, Claude Code, and/or Cursor installed
 
 ### Install
 
@@ -43,7 +43,7 @@ Only **new messages** are indexed on each turn — previously indexed messages a
 npx code-session-memory install
 ```
 
-The `install` command sets up everything for both tools in one shot:
+The `install` command sets up everything for all three tools in one shot:
 
 **OpenCode:**
 1. Copies the plugin to `~/.config/opencode/plugins/code-session-memory.ts`
@@ -51,15 +51,20 @@ The `install` command sets up everything for both tools in one shot:
 3. Writes the MCP server entry into `~/.config/opencode/opencode.json`
 
 **Claude Code:**
-1. Writes a `Stop` hook to `~/.claude.json` (user-scoped global config; fires after each agent turn)
+1. Writes a `Stop` hook to `~/.claude/settings.json` (fires after each agent turn)
 2. Injects the skill into `~/.claude/CLAUDE.md` (with idempotent markers)
 3. Writes the MCP server entry into `~/.claude.json`
 
-**Both tools share:**
+**Cursor:**
+1. Writes a `stop` hook to `~/.cursor/hooks.json` (fires after each agent turn; requires Cursor v2.5+)
+2. Writes the MCP server entry into `~/.cursor/mcp.json`
+3. Copies the skill to `~/.cursor/skills/code-session-memory/SKILL.md`
+
+**All tools share:**
 - The same database at `~/.local/share/code-session-memory/sessions.db`
 - The same MCP server for querying past sessions
 
-Then **restart OpenCode / Claude Code** to activate.
+Then **restart OpenCode / Claude Code / Cursor** to activate.
 
 ### Set your API key
 
@@ -111,8 +116,10 @@ Semantic search across all indexed sessions.
 |---|---|---|---|
 | `queryText` | string | yes | Natural language query |
 | `project` | string | no | Filter by project directory path |
-| `source` | string | no | Filter by tool: `"opencode"` or `"claude-code"` |
+| `source` | string | no | Filter by tool: `"opencode"`, `"claude-code"`, or `"cursor"` |
 | `limit` | number | no | Max results (default: 5) |
+| `fromDate` | string | no | Return chunks indexed on or after this date (ISO 8601, e.g. `"2026-02-01"`) |
+| `toDate` | string | no | Return chunks indexed on or before this date (ISO 8601, e.g. `"2026-02-20"`) |
 
 Example result:
 ```
@@ -142,8 +149,7 @@ Retrieve the full ordered content of a specific session message. Use the `sessio
 You can browse, inspect, and delete indexed sessions directly from the CLI:
 
 ```bash
-npx code-session-memory sessions           # interactive browser
-npx code-session-memory sessions --filter  # with source/date filter step
+npx code-session-memory sessions           # interactive browser (source → date → session)
 ```
 
 The interactive browser lists all sessions with their title, date, source tool, and chunk count. Select a session to:
@@ -155,11 +161,9 @@ You can also `print` or `delete` directly. Without an ID, an interactive picker 
 
 ```bash
 npx code-session-memory sessions print             # pick interactively, then print
-npx code-session-memory sessions print --filter    # filter first, then pick and print
 npx code-session-memory sessions print <id>        # print directly by session ID
 
 npx code-session-memory sessions delete            # pick interactively, then delete
-npx code-session-memory sessions delete --filter   # filter first, then pick and delete
 npx code-session-memory sessions delete <id>       # delete directly by session ID
 ```
 
@@ -181,10 +185,6 @@ How can I add JWT authentication to the Express middleware?
 
 ...
 ```
-
-**Filtering options** (with `--filter`):
-- Source: All tools / OpenCode / Claude Code
-- Date range: Last 7 / 30 / 90 days, last N days (custom), or older than N days (custom)
 
 > **Note:** Deleting a session only removes it from the database. If the original session files still exist on disk, the session will be re-indexed automatically on the next agent turn.
 
@@ -208,6 +208,8 @@ Show me how we solved the TypeScript config issue.
 | `OPENAI_API_KEY` | — | **Required.** Used for embedding generation. |
 | `OPENCODE_MEMORY_DB_PATH` | `~/.local/share/code-session-memory/sessions.db` | Override the database path. |
 | `OPENCODE_CONFIG_DIR` | `~/.config/opencode` | Override the OpenCode config directory. |
+| `CLAUDE_CONFIG_DIR` | `~/.claude` | Override the Claude Code config directory. |
+| `CURSOR_CONFIG_DIR` | `~/.cursor` | Override the Cursor config directory. |
 | `OPENAI_MODEL` | `text-embedding-3-large` | Override the embedding model. |
 
 ### Database path
@@ -230,19 +232,22 @@ code-session-memory/
 │   ├── chunker.ts                # Heading-aware markdown chunker
 │   ├── embedder.ts               # OpenAI embeddings (batched)
 │   ├── session-to-md.ts          # OpenCode SDK messages → markdown
-│   ├── transcript-to-messages.ts # Claude Code JSONL transcript parser
-│   ├── indexer.ts                # Orchestrator: incremental indexing
-│   ├── indexer-cli.ts            # Node.js subprocess (called by OpenCode plugin)
-│   ├── indexer-cli-claude.ts     # Node.js subprocess (called by Claude Code hook)
-│   ├── cli.ts                    # install / status / uninstall / reset-db commands
-│   └── cli-sessions.ts           # sessions list / print / delete (interactive TUI)
+│   ├── transcript-to-messages.ts          # Claude Code JSONL transcript parser
+│   ├── cursor-to-messages.ts             # Cursor state.vscdb reader (metadata + title)
+│   ├── cursor-transcript-to-messages.ts  # Cursor JSONL transcript parser → FullMessage[]
+│   ├── indexer.ts                        # Orchestrator: incremental indexing
+│   ├── indexer-cli.ts                    # Node.js subprocess (called by OpenCode plugin)
+│   ├── indexer-cli-claude.ts             # Node.js subprocess (called by Claude Code hook)
+│   ├── indexer-cli-cursor.ts             # Node.js subprocess (called by Cursor stop hook)
+│   ├── cli.ts                            # install / status / uninstall / reset-db commands
+│   └── cli-sessions.ts                   # sessions list / print / delete / purge (TUI)
 ├── mcp/
 │   ├── server.ts                 # MCP query handlers (testable, injected deps)
 │   └── index.ts                  # MCP stdio server entry point
 ├── plugin/
 │   └── memory.ts                 # OpenCode plugin (session.idle hook)
 ├── skill/
-│   └── memory.md                 # Skill instructions (injected into both tools)
+│   └── memory.md                 # Skill instructions (injected into all tools)
 ├── scripts/
 │   └── generate-fixtures.ts      # Generates committed e2e test fixtures (run manually)
 └── tests/
@@ -252,9 +257,12 @@ code-session-memory/
     ├── indexer.test.ts
     ├── mcp-server.test.ts
     ├── session-to-md.test.ts
-    ├── e2e-claude.test.ts        # End-to-end: Claude Code pipeline
-    ├── e2e-opencode.test.ts      # End-to-end: OpenCode pipeline
-    └── fixtures/                 # Committed session files (generated by generate-fixtures)
+    ├── cursor-to-messages.test.ts           # Unit tests: Cursor SQLite reader
+    ├── cursor-transcript-to-messages.test.ts # Unit tests: Cursor JSONL parser
+    ├── e2e-claude.test.ts                   # End-to-end: Claude Code pipeline
+    ├── e2e-opencode.test.ts                 # End-to-end: OpenCode pipeline
+    ├── e2e-cursor.test.ts                   # End-to-end: Cursor pipeline
+    └── fixtures/                  # Committed session files (generated by generate-fixtures)
 ```
 
 ## Development
@@ -287,22 +295,25 @@ Tests use [Vitest](https://vitest.dev) and run without any external dependencies
 - E2e tests use committed fixture files in `tests/fixtures/` (real transcripts, no CLI calls during `npm test`)
 
 ```
- ✓ tests/chunker.test.ts        (15 tests)
- ✓ tests/mcp-server.test.ts     (13 tests)
- ✓ tests/session-to-md.test.ts  (18 tests)
- ✓ tests/embedder.test.ts        (9 tests)
- ✓ tests/database.test.ts       (25 tests)
- ✓ tests/indexer.test.ts         (8 tests)
- ✓ tests/e2e-claude.test.ts     (16 tests)
- ✓ tests/e2e-opencode.test.ts   (14 tests)
-   Tests  118 passed
+ ✓ tests/chunker.test.ts                          (15 tests)
+ ✓ tests/mcp-server.test.ts                       (14 tests)
+ ✓ tests/session-to-md.test.ts                    (21 tests)
+ ✓ tests/embedder.test.ts                          (9 tests)
+ ✓ tests/database.test.ts                         (27 tests)
+ ✓ tests/indexer.test.ts                           (9 tests)
+ ✓ tests/cursor-to-messages.test.ts               (15 tests)
+ ✓ tests/cursor-transcript-to-messages.test.ts     (7 tests)
+ ✓ tests/e2e-claude.test.ts                       (18 tests)
+ ✓ tests/e2e-cursor.test.ts                        (8 tests)
+ ✓ tests/e2e-opencode.test.ts                     (14 tests)
+   Tests  157 passed
 ```
 
 To refresh the e2e fixtures (e.g. after changing the indexer or parsers), run:
 ```bash
 npm run generate-fixtures
 ```
-This invokes the real `claude` and `opencode` CLIs to generate two-turn sessions with tool use, then commits the results to `tests/fixtures/`.
+This invokes the real `claude` and `opencode` CLIs to generate two-turn sessions with tool use, reads the most recent Cursor session from the live `state.vscdb`, then commits all results to `tests/fixtures/`.
 
 ## Uninstall
 
@@ -310,7 +321,7 @@ This invokes the real `claude` and `opencode` CLIs to generate two-turn sessions
 npx code-session-memory uninstall
 ```
 
-This removes the plugin, hooks, skill files, and MCP config entries for both tools. The database is **not** removed automatically.
+This removes the plugin, hooks, skill files, and MCP config entries for all tools (OpenCode, Claude Code, and Cursor). The database is **not** removed automatically.
 
 To delete individual sessions instead of wiping everything, use the [session browser](#browsing-sessions):
 ```bash
@@ -349,10 +360,10 @@ The plugin/hook fires on every agent turn. To avoid re-processing the entire ses
 
 1. Reads `last_indexed_message_id` from the `sessions_meta` table
 2. Skips all messages up to and including that ID
-3. Processes only the new messages
+3. Processes only the new messages — renders, chunks, and embeds all of them in a **single batched OpenAI API call**
 4. Updates `last_indexed_message_id` after success
 
-This makes each indexing pass O(new messages) rather than O(all messages).
+This makes each indexing pass O(new messages) rather than O(all messages), and limits network round-trips to one embedding call per turn regardless of message count.
 
 ### Why a Node.js subprocess?
 
@@ -365,6 +376,12 @@ Claude Code writes a JSONL transcript after each session turn. The parser (`tran
 - Skipping internal `thinking` blocks, metadata entries, and error messages
 - Converting `tool_use` / `tool_result` entries to readable markdown
 
+### Cursor session reading
+
+Cursor provides a `transcript_path` field in the stop hook payload — a JSONL file written **synchronously before the hook fires**, so it is always complete and race-condition-free. Each line is `{ "role": "user"|"assistant", "message": { "content": [{ "type": "text", "text": "..." }] } }`. The reader (`cursor-transcript-to-messages.ts`) parses this file directly, strips Cursor's `<user_query>` wrapper tags, and assigns stable `composerId-lineIndex` IDs for incremental indexing.
+
+Session metadata (title only) is read best-effort from the SQLite `state.vscdb`. The Cursor `stop` hook fires after each agent turn and requires **Cursor v2.5+**.
+
 ### Chunking strategy
 
 - Heading-aware splitting — headings define semantic boundaries
@@ -375,7 +392,7 @@ Claude Code writes a JSONL transcript after each session turn. The parser (`tran
 
 ### MCP server
 
-The MCP server uses **stdio transport** — the simplest and most reliable transport for local use. It opens and closes the SQLite connection on each query (no persistent connection), making it safe to run alongside the indexer. The `query_sessions` tool accepts an optional `source` parameter to filter results to a specific tool.
+The MCP server uses **stdio transport** — the simplest and most reliable transport for local use. It opens and closes the SQLite connection on each query (no persistent connection), making it safe to run alongside the indexer. The `query_sessions` tool supports filtering by `source`, `project`, and date range (`fromDate`/`toDate`).
 
 ## License
 
