@@ -13,6 +13,7 @@
 import fs from "fs";
 import path from "path";
 import os from "os";
+import * as clack from "@clack/prompts";
 import { resolveDbPath, openDatabase } from "./database";
 import { cmdSessions } from "./cli-sessions";
 
@@ -591,7 +592,7 @@ function uninstall(): void {
 `);
 }
 
-function resetDb(): void {
+async function resetDb(): Promise<void> {
   console.log(bold("\ncode-session-memory reset-db\n"));
 
   const dbPath = resolveDbPath();
@@ -615,22 +616,14 @@ function resetDb(): void {
     console.log(`  Database: ${dim(dbPath)}\n`);
   }
 
-  // Prompt for confirmation
-  process.stdout.write(`  ${red("This will permanently delete all indexed data.")} Confirm? [y/N] `);
+  // Prompt for confirmation using clack (handles TTY correctly)
+  const confirmed = await clack.confirm({
+    message: "This will permanently delete all indexed data. Continue?",
+    initialValue: false,
+  });
 
-  const response = (() => {
-    try {
-      // Read a single line synchronously from stdin
-      const buf = Buffer.alloc(64);
-      const n = fs.readSync(0, buf, 0, buf.length, null);
-      return buf.slice(0, n).toString("utf8").trim().toLowerCase();
-    } catch {
-      return "";
-    }
-  })();
-
-  if (response !== "y" && response !== "yes") {
-    console.log(`\n  ${dim("Aborted — database was not modified.")}\n`);
+  if (clack.isCancel(confirmed) || !confirmed) {
+    clack.cancel("Aborted — database was not modified.");
     return;
   }
 
@@ -640,7 +633,7 @@ function resetDb(): void {
   const db = openDatabase({ dbPath });
   db.close();
 
-  console.log(`\n  ${green("Done.")} Database reset — all indexed data removed.\n`);
+  clack.outro(`${green("Done.")} Database reset — all indexed data removed.`);
 }
 
 function help(): void {
@@ -676,7 +669,12 @@ switch (cmd) {
   case "install":   install();   break;
   case "status":    status();    break;
   case "uninstall": uninstall(); break;
-  case "reset-db":  resetDb();   break;
+  case "reset-db":
+    resetDb().catch((err) => {
+      console.error(err instanceof Error ? err.message : String(err));
+      process.exit(1);
+    });
+    break;
   case "sessions":
     cmdSessions(process.argv.slice(3)).catch((err) => {
       console.error(err instanceof Error ? err.message : String(err));
