@@ -1,11 +1,12 @@
 {
-  "name": "opencode-memory",
+  "name": "opencode-session-memory",
   "version": "0.1.0",
   "description": "Automatically index OpenCode sessions into a sqlite-vec vector database for semantic search across your AI coding history",
   "type": "commonjs",
-  "main": "dist/indexer.js",
+  "main": "dist/src/indexer.js",
+  "types": "dist/src/indexer.d.ts",
   "bin": {
-    "opencode-memory": "./dist/src/cli.js"
+    "opencode-session-memory": "./dist/src/cli.js"
   },
   "files": [
     "dist/",
@@ -30,12 +31,15 @@
     "ai",
     "sessions"
   ],
-  "author": "",
+  "author": "Denis Jannot <djannot@gmail.com>",
   "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.12.1",
-    "@opencode-ai/plugin": "latest",
-    "@opencode-ai/sdk": "latest",
+    "@opencode-ai/plugin": "^1.2.8",
+    "@opencode-ai/sdk": "^1.2.8",
     "better-sqlite3": "^11.9.1",
     "openai": "^4.20.1",
     "sqlite-vec": "0.1.7-alpha.2",

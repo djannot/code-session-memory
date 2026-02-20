@@ -1,11 +1,11 @@
 #!/usr/bin/env node
 /**
- * opencode-memory CLI
+ * opencode-session-memory CLI
  *
  * Usage:
- *   npx opencode-memory install   — install plugin, skill and initialise DB
- *   npx opencode-memory status    — show installation status
- *   npx opencode-memory uninstall — remove plugin and skill files
+ *   npx opencode-session-memory install   — install plugin, skill and initialise DB
+ *   npx opencode-session-memory status    — show installation status
+ *   npx opencode-session-memory uninstall — remove plugin and skill files
  */
 
 import fs from "fs";
@@ -33,11 +33,11 @@ function getSkillDir(): string {
 }
 
 function getPluginDst(): string {
-  return path.join(getPluginDir(), "opencode-memory.ts");
+  return path.join(getPluginDir(), "opencode-session-memory.ts");
 }
 
 function getSkillDst(): string {
-  return path.join(getSkillDir(), "opencode-memory.md");
+  return path.join(getSkillDir(), "opencode-session-memory.md");
 }
 
 // The installed package location
@@ -50,7 +50,6 @@ function getPluginSrc(): string {
   return path.join(getPackageRoot(), "plugin", "memory.ts");
 }
 
-
 function getSkillSrc(): string {
   return path.join(getPackageRoot(), "skill", "memory.md");
 }
@@ -58,7 +57,6 @@ function getSkillSrc(): string {
 function getMcpServerPath(): string {
   return path.join(getPackageRoot(), "dist", "mcp", "index.js");
 }
-
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -122,7 +120,7 @@ function dim(s: string): string {
 // ---------------------------------------------------------------------------
 
 function install(): void {
-  console.log(bold("\nopencode-memory install\n"));
+  console.log(bold("\nopencode-session-memory install\n"));
 
   const dbPath = resolveDbPath();
   const pluginDst = getPluginDst();
@@ -172,7 +170,7 @@ ${bold("Add the MCP server to your opencode config")} (~/.config/opencode/openco
 
   ${dim('{')}
     ${dim('"mcp":')} ${dim('{')}
-      ${dim('"opencode-memory":')} ${dim('{')}
+      ${dim('"opencode-session-memory":')} ${dim('{')}
         ${dim('"type": "local",')}
         ${dim(`"command": ["node", "${mcpPath}"]`)}
       ${dim('}')}\n    ${dim('}')}\n  ${dim('}')}
@@ -184,12 +182,12 @@ ${bold("Environment variables required:")}
 ${bold("Default DB path:")} ${dbPath}
 
 Sessions will be automatically indexed after each agent turn.
-Run ${bold("npx opencode-memory status")} to verify installation.
+Run ${bold("npx opencode-session-memory status")} to verify installation.
 `);
 }
 
 function status(): void {
-  console.log(bold("\nopencode-memory status\n"));
+  console.log(bold("\nopencode-session-memory status\n"));
 
   const dbPath = resolveDbPath();
   const pluginDst = getPluginDst();
@@ -222,12 +220,12 @@ function status(): void {
   }
 
   const allOk = dbExists && pluginExists && skillExists && mcpExists;
-  console.log(`\n  ${allOk ? green("All components installed.") : red("Some components missing — run \"npx opencode-memory install\".")}`);
+  console.log(`\n  ${allOk ? green("All components installed.") : red("Some components missing — run \"npx opencode-session-memory install\".")}`);
   console.log();
 }
 
 function uninstall(): void {
-  console.log(bold("\nopencode-memory uninstall\n"));
+  console.log(bold("\nopencode-session-memory uninstall\n"));
 
   const pluginDst = getPluginDst();
   const skillDst = getSkillDst();
@@ -250,13 +248,13 @@ function uninstall(): void {
 
 function help(): void {
   console.log(`
-${bold("opencode-memory")} — Vector memory for OpenCode sessions
+${bold("opencode-session-memory")} — Vector memory for OpenCode sessions
 
 ${bold("Usage:")}
-  npx opencode-memory install    Install plugin, skill and initialise the DB
-  npx opencode-memory status     Show installation status and DB stats
-  npx opencode-memory uninstall  Remove plugin and skill files (keeps DB)
-  npx opencode-memory help       Show this help
+  npx opencode-session-memory install    Install plugin, skill and initialise the DB
+  npx opencode-session-memory status     Show installation status and DB stats
+  npx opencode-session-memory uninstall  Remove plugin and skill files (keeps DB)
+  npx opencode-session-memory help       Show this help
 
 ${bold("Environment variables:")}
   OPENAI_API_KEY            Required for embedding generation

@@ -1,8 +1,8 @@
-# opencode-memory
+# opencode-session-memory
 
 Automatic vector memory for [OpenCode](https://opencode.ai) sessions.
 
-Every time the AI agent finishes its turn, `opencode-memory` automatically indexes the new messages into a local [sqlite-vec](https://github.com/asg017/sqlite-vec) vector database. Past sessions become semantically searchable — both by the AI agent (via the MCP server) and by you.
+Every time the AI agent finishes its turn, `opencode-session-memory` automatically indexes the new messages into a local [sqlite-vec](https://github.com/asg017/sqlite-vec) vector database. Past sessions become semantically searchable — both by the AI agent (via the MCP server) and by you.
 
 ## How it works
 
@@ -11,7 +11,7 @@ Agent finishes turn
        │
        ▼
 OpenCode plugin (session.idle event)
-       │  uses OpenCode SDK to fetch new messages
+       │  fetches new messages from the OpenCode REST API
        ▼
 session-to-md  →  converts messages to markdown
        │
@@ -41,37 +41,34 @@ Only **new messages** are indexed on each turn — previously indexed messages a
 ### Install
 
 ```bash
-npm install -g opencode-memory
+npm install -g opencode-session-memory
 # or run without installing:
-npx opencode-memory install
+npx opencode-session-memory install
 ```
 
 The `install` command:
 1. Creates `~/.local/share/opencode-memory/sessions.db` and initialises the schema
-2. Copies the plugin to `~/.config/opencode/plugins/opencode-memory.ts`
-3. Copies the skill to `~/.config/opencode/skills/opencode-memory.md`
+2. Copies the plugin to `~/.config/opencode/plugins/opencode-session-memory.ts`
+3. Copies the skill to `~/.config/opencode/skills/opencode-session-memory.md`
 4. Prints the MCP server config snippet to add to your `opencode.json`
 
 ### Configure MCP server
 
-After running `install`, add the MCP server to `~/.config/opencode/opencode.json`:
+After running `install`, add the MCP server to your `opencode.json` (global at `~/.config/opencode/opencode.json` or project-level):
 
 ```json
 {
   "$schema": "https://opencode.ai/config.json",
   "mcp": {
-    "opencode-memor": {
+    "opencode-session-memory": {
       "type": "local",
-      "command": ["node", "/Users/denisjannot/Documents/ai/opencode-memory/dist/mcp/index.js"],
-      "environment": {
-        "OPENAI_API_KEY": "${OPENAI_API_KEY}"
-      }
+      "command": ["node", "/path/to/dist/mcp/index.js"]
     }
   }
 }
 ```
 
-The exact path is printed by `npx opencode-memory install`.
+The exact path is printed by `npx opencode-session-memory install`.
 
 ### Set your API key
 
@@ -81,6 +78,8 @@ export OPENAI_API_KEY=sk-...
 
 Add this to your shell profile (`.bashrc`, `.zshrc`, etc.) so it's always available.
 
+**Note:** Do not set `OPENAI_API_KEY` in the MCP server's `environment` config block — OpenCode inherits it from the shell automatically, and setting it there would override the real value with a literal string.
+
 ## Usage
 
 Once installed, memory indexing is **fully automatic**. No further action needed — sessions are indexed as you use OpenCode.
@@ -88,16 +87,16 @@ Once installed, memory indexing is **fully automatic**. No further action needed
 ### Verify installation
 
 ```bash
-npx opencode-memory status
+npx opencode-session-memory status
 ```
 
 Output:
 ```
-opencode-memory status
+opencode-session-memory status
 
   ✓  Database       ~/.local/share/opencode-memory/sessions.db
-  ✓  Plugin         ~/.config/opencode/plugins/opencode-memory.ts
-  ✓  Skill          ~/.config/opencode/skills/opencode-memory.md
+  ✓  Plugin         ~/.config/opencode/plugins/opencode-session-memory.ts
+  ✓  Skill          ~/.config/opencode/skills/opencode-session-memory.md
   ✓  MCP server     /path/to/dist/mcp/index.js
 
   Indexed chunks:   1842
@@ -172,13 +171,30 @@ The default database path works on both **macOS** and **Linux**. On macOS, `~/.l
 To change it:
 ```bash
 export OPENCODE_MEMORY_DB_PATH=/custom/path/sessions.db
-npx opencode-memory install
+npx opencode-session-memory install
+```
+
+## Programmatic API
+
+You can also use the indexer directly in your own code:
+
+```typescript
+import { indexNewMessages, reindexSession } from "opencode-session-memory";
+
+// Incrementally index new messages
+const { indexed, skipped } = await indexNewMessages(
+  { id: "ses_abc123", title: "My session", directory: "/path/to/project" },
+  messages, // FullMessage[] from the OpenCode SDK
+);
+
+// Re-index all messages from scratch
+const { indexed } = await reindexSession(session, messages);
 ```
 
 ## Project structure
 
 ```
-opencode-memory/
+opencode-session-memory/
 ├── src/
 │   ├── types.ts          # Shared TypeScript types
 │   ├── database.ts       # SQLite-vec: init, insert, query
@@ -186,6 +202,7 @@ opencode-memory/
 │   ├── embedder.ts       # OpenAI embeddings (batched)
 │   ├── session-to-md.ts  # SDK messages → markdown string
 │   ├── indexer.ts        # Orchestrator: incremental indexing
+│   ├── indexer-cli.ts    # Node.js subprocess entry point (called by plugin)
 │   └── cli.ts            # install / status / uninstall commands
 ├── mcp/
 │   ├── server.ts         # MCP query handlers (testable, injected deps)
@@ -230,19 +247,19 @@ Tests use [Vitest](https://vitest.dev) and run without any external dependencies
 - Indexer tests use a temp directory on disk
 
 ```
- ✓ tests/chunker.test.ts      (15 tests)
- ✓ tests/mcp-server.test.ts   (13 tests)
+ ✓ tests/chunker.test.ts       (15 tests)
+ ✓ tests/mcp-server.test.ts    (13 tests)
  ✓ tests/session-to-md.test.ts (18 tests)
- ✓ tests/embedder.test.ts      (9 tests)
- ✓ tests/database.test.ts     (25 tests)
- ✓ tests/indexer.test.ts       (8 tests)
+ ✓ tests/embedder.test.ts       (9 tests)
+ ✓ tests/database.test.ts      (25 tests)
+ ✓ tests/indexer.test.ts        (8 tests)
    Tests  88 passed
 ```
 
 ## Uninstall
 
 ```bash
-npx opencode-memory uninstall
+npx opencode-session-memory uninstall
 ```
 
 This removes the plugin and skill files. The database is **not** removed automatically.
@@ -265,9 +282,13 @@ The plugin fires on every `session.idle` event (i.e., every agent turn). To avoi
 
 This makes each indexing pass O(new messages) rather than O(all messages).
 
+### Why a Node.js subprocess?
+
+OpenCode plugins run inside **Bun**, but `better-sqlite3` and `sqlite-vec` are native Node.js addons that don't load under Bun. The plugin therefore spawns a Node.js subprocess (`indexer-cli.js`) to handle all database operations. The subprocess fetches session data from the OpenCode REST API using plain `fetch()` and exits when done.
+
 ### Chunking strategy
 
-Adapted from [doc2vec](https://github.com/denisjannot/doc2vec):
+Adapted from [doc2vec](https://github.com/djannot/doc2vec):
 - Heading-aware splitting — headings define semantic boundaries
 - Max 1000 whitespace-tokenized words per chunk
 - Sections below 150 words are merged with adjacent sections

@@ -2,9 +2,9 @@
 description: Search past OpenCode sessions stored in the vector memory database
 ---
 
-# opencode-memory
+# opencode-session-memory
 
-You have access to an MCP server called `opencode-memory` that automatically indexes all your past OpenCode sessions into a local vector database. Every time a session completes a turn, the new messages are embedded and stored — giving you a searchable memory of your entire AI coding history.
+You have access to an MCP server called `opencode-session-memory` that automatically indexes all your past OpenCode sessions into a local vector database. Every time a session completes a turn, the new messages are embedded and stored — giving you a searchable memory of your entire AI coding history.
 
 ## Available tools
 
