@@ -1,6 +1,18 @@
 import type { SessionInfo, FullMessage, MessagePart, ToolState } from "./types";
 
 // ---------------------------------------------------------------------------
+// Constants
+// ---------------------------------------------------------------------------
+
+/** Maximum characters to include from a tool output before truncating. */
+const TOOL_OUTPUT_MAX_CHARS = 500;
+
+function truncateOutput(output: string): string {
+  if (output.length <= TOOL_OUTPUT_MAX_CHARS) return output;
+  return output.slice(0, TOOL_OUTPUT_MAX_CHARS) + "\n… [truncated]";
+}
+
+// ---------------------------------------------------------------------------
 // Part renderers
 // ---------------------------------------------------------------------------
 
@@ -21,10 +33,11 @@ function renderToolPart(part: MessagePart): string {
 
   if (part.state === "result" && part.result !== undefined) {
     const result = part.result;
-    const resultStr =
+    const resultStr = truncateOutput(
       typeof result === "string"
         ? result
-        : JSON.stringify(result, null, 2);
+        : JSON.stringify(result, null, 2),
+    );
 
     lines.push("**Output:**");
     // Only wrap in code block if not already markdown-formatted
@@ -66,8 +79,9 @@ function renderOpenCodeToolPart(part: MessagePart): string {
 
   if (state?.output !== undefined) {
     const output = state.output;
-    const outputStr =
-      typeof output === "string" ? output : JSON.stringify(output, null, 2);
+    const outputStr = truncateOutput(
+      typeof output === "string" ? output : JSON.stringify(output, null, 2),
+    );
     lines.push("**Output:**");
     if (typeof output === "string" && !output.startsWith("```")) {
       lines.push("```");
@@ -131,6 +145,10 @@ function renderMessageHeading(msg: FullMessage): string {
 
   if (role === "user") {
     return "## User";
+  }
+
+  if (role === "tool") {
+    return "## Tool Result";
   }
 
   // Assistant: include agent + model + duration where available

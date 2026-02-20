@@ -226,4 +226,61 @@ describe("messageToMarkdown", () => {
     const md = messageToMarkdown(msg);
     expect(md).toContain("const x = 1");
   });
+
+  it("truncates tool output longer than 500 chars and appends [truncated]", () => {
+    const longOutput = "x".repeat(600);
+    const msg: FullMessage = {
+      info: { id: "msg_a001", role: "assistant", time: {} },
+      parts: [
+        {
+          type: "tool-invocation",
+          toolName: "read",
+          state: "result",
+          args: { filePath: "big.txt" },
+          result: longOutput,
+        },
+      ],
+    };
+    const md = messageToMarkdown(msg);
+    expect(md).toContain("[truncated]");
+    // Should not contain the full 600-char output
+    expect(md).not.toContain(longOutput);
+  });
+
+  it("does not truncate tool output of exactly 500 chars", () => {
+    const exactOutput = "y".repeat(500);
+    const msg: FullMessage = {
+      info: { id: "msg_a001", role: "assistant", time: {} },
+      parts: [
+        {
+          type: "tool-invocation",
+          toolName: "bash",
+          state: "result",
+          args: { command: "echo hi" },
+          result: exactOutput,
+        },
+      ],
+    };
+    const md = messageToMarkdown(msg);
+    expect(md).not.toContain("[truncated]");
+    expect(md).toContain(exactOutput);
+  });
+
+  it("renders role=tool message with ## Tool Result heading", () => {
+    const msg: FullMessage = {
+      info: { id: "msg_t001", role: "tool", time: {} },
+      parts: [
+        {
+          type: "tool-invocation",
+          toolName: "tool_result",
+          toolCallId: "call_1",
+          state: "result",
+          result: "file1.ts\nfile2.ts",
+        },
+      ],
+    };
+    const md = messageToMarkdown(msg);
+    expect(md).toContain("## Tool Result");
+    expect(md).not.toContain("## User");
+  });
 });

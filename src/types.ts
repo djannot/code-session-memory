@@ -48,7 +48,7 @@ export interface SessionInfo {
  */
 export interface MessageInfo {
   id: string;
-  role: "user" | "assistant";
+  role: "user" | "assistant" | "tool";
   time?: { created?: number; completed?: number };
   agent?: string;
   modelID?: string;

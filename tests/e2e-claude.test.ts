@@ -121,6 +121,23 @@ describe("parseTranscript — turn1", () => {
     expect(title.length).toBeGreaterThan(0);
     expect(title).toMatch(/list files/i);
   });
+
+  it("tool_result messages have role='tool', not 'user'", () => {
+    const toolResultMsg = messages.find((m) =>
+      m.parts.some((p) => p.type === "tool-invocation" && p.state === "result"),
+    );
+    expect(toolResultMsg).toBeDefined();
+    expect(toolResultMsg!.info.role).toBe("tool");
+  });
+
+  it("no tool_result message has role='user'", () => {
+    const wrongRole = messages.find(
+      (m) =>
+        m.info.role === "user" &&
+        m.parts.some((p) => p.type === "tool-invocation" && p.state === "result"),
+    );
+    expect(wrongRole).toBeUndefined();
+  });
 });
 
 describe("parseTranscript — full session", () => {

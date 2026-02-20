@@ -139,10 +139,16 @@ function convertUserMessage(line: TranscriptUserLine): FullMessage | null {
 
   if (parts.length === 0) return null;
 
+  // Messages that contain only tool_result blocks are labeled as "tool" role
+  // so the renderer can emit "## Tool Result" instead of "## User".
+  const isToolResultOnly =
+    Array.isArray(line.message.content) &&
+    parts.every((p) => p.type === "tool-invocation" && p.toolName === "tool_result");
+
   return {
     info: {
       id: line.uuid,
-      role: "user",
+      role: isToolResultOnly ? "tool" : "user",
       time: { created: new Date(line.timestamp).getTime() },
     },
     parts,
