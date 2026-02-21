@@ -13,6 +13,7 @@
  * Uses plain fetch() to call the REST API — no ESM/CJS SDK dependency.
  */
 
+import { APIConnectionError, RateLimitError } from "openai";
 import { resolveDbPath, openDatabase } from "./database";
 import { indexNewMessages } from "./indexer";
 import { getSessionFromOpenCodeDb, getMessagesFromOpenCodeDb } from "./opencode-db-to-messages";
@@ -134,6 +135,13 @@ async function main() {
 }
 
 main().catch((err) => {
+  // Transient OpenAI errors (network blip, rate limit) — exit cleanly so the
+  // plugin doesn't log a noisy red error. The messages remain un-indexed and
+  // will be picked up on the next session.idle event.
+  if (err instanceof APIConnectionError || err instanceof RateLimitError) {
+    process.exit(0);
+  }
+
   const url = process.argv[3] ?? "(no url)";
   process.stderr.write(
     `[code-session-memory] indexer-cli error: ${err instanceof Error ? err.message : String(err)} (serverUrl: ${url})\n`,
