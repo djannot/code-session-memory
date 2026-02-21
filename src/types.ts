@@ -103,6 +103,8 @@ export interface QueryResult {
   heading_hierarchy?: string;
   chunk_index?: number;
   total_chunks?: number;
+  session_id?: string;
+  session_title?: string;
   source?: SessionSource;
   created_at?: number;
 }

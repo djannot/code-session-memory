@@ -16,6 +16,7 @@ import os from "os";
 import * as clack from "@clack/prompts";
 import { resolveDbPath, openDatabase } from "./database";
 import { cmdSessions } from "./cli-sessions";
+import { cmdQuery } from "./cli-query";
 
 // ---------------------------------------------------------------------------
 // Paths — OpenCode
@@ -921,6 +922,11 @@ ${bold("Usage:")}
   npx code-session-memory status                          Show installation status and DB stats
   npx code-session-memory uninstall                       Remove all installed components (keeps DB)
   npx code-session-memory reset-db                        Delete all indexed data (keeps installation)
+  npx code-session-memory query <text>                    Semantic search across all indexed sessions
+  npx code-session-memory query <text> --source <s>       Filter by source (opencode, claude-code, cursor)
+  npx code-session-memory query <text> --limit <n>        Max results (default: 5)
+  npx code-session-memory query <text> --from <date>      Results from date (e.g. 2026-02-01)
+  npx code-session-memory query <text> --to <date>        Results up to date (e.g. 2026-02-20)
   npx code-session-memory sessions                        Browse sessions (tree: source → date → session)
   npx code-session-memory sessions print <id>             Print all chunks of a session to stdout
   npx code-session-memory sessions delete <id>            Delete a session from the DB
@@ -949,6 +955,12 @@ switch (cmd) {
   case "uninstall": uninstall(); break;
   case "reset-db":
     resetDb().catch((err) => {
+      console.error(err instanceof Error ? err.message : String(err));
+      process.exit(1);
+    });
+    break;
+  case "query":
+    cmdQuery(process.argv.slice(3)).catch((err) => {
       console.error(err instanceof Error ? err.message : String(err));
       process.exit(1);
     });
