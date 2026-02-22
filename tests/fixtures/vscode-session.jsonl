@@ -1,0 +1,13 @@
+{"type":"session.start","data":{"sessionId":"vscode-test-session-001","version":1,"producer":"copilot-agent","copilotVersion":"0.37.8","vscodeVersion":"1.109.4","startTime":"2026-02-22T10:00:00.000Z"},"id":"evt-001","timestamp":"2026-02-22T10:00:00.000Z","parentId":null}
+{"type":"user.message","data":{"content":"Show me the contents of package.json","attachments":[]},"id":"evt-002","timestamp":"2026-02-22T10:00:01.000Z","parentId":"evt-001"}
+{"type":"assistant.turn_start","data":{"turnId":"0"},"id":"evt-003","timestamp":"2026-02-22T10:00:01.001Z","parentId":"evt-002"}
+{"type":"tool.execution_start","data":{"toolCallId":"tool-001","toolName":"readFile","arguments":{"path":"package.json"}},"id":"evt-004","timestamp":"2026-02-22T10:00:02.000Z","parentId":"evt-003"}
+{"type":"tool.execution_complete","data":{"toolCallId":"tool-001","result":"{ \"name\": \"my-project\", \"version\": \"1.0.0\" }","success":true},"id":"evt-005","timestamp":"2026-02-22T10:00:02.500Z","parentId":"evt-004"}
+{"type":"assistant.message","data":{"messageId":"msg-001","content":"Here's the contents of your package.json:\n\n```json\n{\n  \"name\": \"my-project\",\n  \"version\": \"1.0.0\"\n}\n```\n\nThe project is called \"my-project\" at version 1.0.0.","toolRequests":[{"toolCallId":"tool-001","toolName":"readFile","arguments":{"path":"package.json"}}]},"id":"evt-006","timestamp":"2026-02-22T10:00:03.000Z","parentId":"evt-005"}
+{"type":"assistant.turn_end","data":{"turnId":"0"},"id":"evt-007","timestamp":"2026-02-22T10:00:03.001Z","parentId":"evt-006"}
+{"type":"user.message","data":{"content":"Now add a description field to it","attachments":[]},"id":"evt-008","timestamp":"2026-02-22T10:01:00.000Z","parentId":"evt-007"}
+{"type":"assistant.turn_start","data":{"turnId":"1"},"id":"evt-009","timestamp":"2026-02-22T10:01:00.001Z","parentId":"evt-008"}
+{"type":"tool.execution_start","data":{"toolCallId":"tool-002","toolName":"editFiles","arguments":{"files":["package.json"]}},"id":"evt-010","timestamp":"2026-02-22T10:01:01.000Z","parentId":"evt-009"}
+{"type":"tool.execution_complete","data":{"toolCallId":"tool-002","result":"File edited successfully","success":true},"id":"evt-011","timestamp":"2026-02-22T10:01:01.500Z","parentId":"evt-010"}
+{"type":"assistant.message","data":{"messageId":"msg-002","content":"I've added a description field to your package.json.","toolRequests":[{"toolCallId":"tool-002","toolName":"editFiles","arguments":{"files":["package.json"]}}]},"id":"evt-012","timestamp":"2026-02-22T10:01:02.000Z","parentId":"evt-011"}
+{"type":"assistant.turn_end","data":{"turnId":"1"},"id":"evt-013","timestamp":"2026-02-22T10:01:02.001Z","parentId":"evt-012"}

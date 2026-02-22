@@ -1,7 +1,7 @@
 {
   "name": "code-session-memory",
-  "version": "0.8.1",
-  "description": "Automatically index OpenCode, Claude Code, and Cursor sessions into a shared sqlite-vec vector database for semantic search across your AI coding history",
+  "version": "0.9.0",
+  "description": "Automatically index OpenCode, Claude Code, Cursor, and VS Code sessions into a shared sqlite-vec vector database for semantic search across your AI coding history",
   "type": "commonjs",
   "main": "dist/src/indexer.js",
   "types": "dist/src/indexer.d.ts",
@@ -14,7 +14,7 @@
     "skill/"
   ],
   "scripts": {
-    "build": "tsc && chmod 755 dist/src/cli.js dist/mcp/index.js",
+    "build": "tsc && chmod 755 dist/src/cli.js dist/mcp/index.js dist/src/indexer-cli-vscode.js",
     "build:watch": "tsc --watch",
     "start:mcp": "node dist/mcp/index.js",
     "test": "vitest run",
@@ -27,6 +27,7 @@
     "opencode",
     "claude-code",
     "cursor",
+    "vscode",
     "mcp",
     "sqlite-vec",
     "vector",

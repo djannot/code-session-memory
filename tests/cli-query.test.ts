@@ -100,8 +100,13 @@ describe("parseQueryArgs", () => {
     expect(() => parseQueryArgs([])).toThrow("Query text is required");
   });
 
+  it("parses --source vscode", () => {
+    const opts = parseQueryArgs(["auth", "--source", "vscode"]);
+    expect(opts.source).toBe("vscode");
+  });
+
   it("throws on invalid --source value", () => {
-    expect(() => parseQueryArgs(["auth", "--source", "vscode"])).toThrow('Invalid --source "vscode"');
+    expect(() => parseQueryArgs(["auth", "--source", "invalid"])).toThrow('Invalid --source "invalid"');
   });
 
   it("throws on invalid --limit value", () => {

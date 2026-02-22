@@ -100,6 +100,10 @@ function getIndexerCliCursorPath(): string {
   return path.join(getPackageRoot(), "dist", "src", "indexer-cli-cursor.js");
 }
 
+function getIndexerCliVscodePath(): string {
+  return path.join(getPackageRoot(), "dist", "src", "indexer-cli-vscode.js");
+}
+
 // ---------------------------------------------------------------------------
 // Paths — Cursor
 // ---------------------------------------------------------------------------
@@ -127,8 +131,49 @@ function getCursorSkillDst(): string {
 }
 
 // ---------------------------------------------------------------------------
+// Paths — VS Code
+// ---------------------------------------------------------------------------
+
+function getVscodeConfigDir(): string {
+  const envDir = process.env.VSCODE_CONFIG_DIR;
+  if (envDir) return envDir;
+  if (process.platform === "darwin") {
+    return path.join(os.homedir(), "Library", "Application Support", "Code", "User");
+  }
+  // Linux (and fallback)
+  return path.join(os.homedir(), ".config", "Code", "User");
+}
+
+function getVscodeSettingsPath(): string {
+  return path.join(getVscodeConfigDir(), "settings.json");
+}
+
+function getVscodeMcpConfigPath(): string {
+  return path.join(getVscodeConfigDir(), "mcp.json");
+}
+
+function getVscodeHooksPath(): string {
+  return path.join(getVscodeConfigDir(), "hooks", "code-session-memory.json");
+}
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/**
+ * Parse a JSONC string (JSON with comments and trailing commas).
+ * VS Code's settings.json uses JSONC, so we need this to read it safely.
+ */
+function parseJsonc(text: string): unknown {
+  // Remove single-line comments (// ...)
+  // Remove multi-line comments (/* ... */)
+  // Remove trailing commas before } or ]
+  const stripped = text
+    .replace(/\/\/[^\n]*/g, "")
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/,(\s*[}\]])/g, "$1");
+  return JSON.parse(stripped);
+}
 
 function ensureDir(dir: string): void {
   fs.mkdirSync(dir, { recursive: true });
@@ -641,6 +686,220 @@ function uninstallCursorSkill(): "done" | "not_found" {
 }
 
 // ---------------------------------------------------------------------------
+// VS Code — hook
+// ---------------------------------------------------------------------------
+
+/**
+ * Installs the VS Code Stop hook at ~/.vscode/hooks/code-session-memory.json
+ * using the Copilot hook format.
+ */
+function installVscodeHook(indexerCliVscodePath: string): { hooksPath: string; existed: boolean } {
+  const hooksPath = getVscodeHooksPath();
+  const existed = fs.existsSync(hooksPath);
+
+  // Always overwrite with our hook config (this file is owned by us)
+  const config = {
+    hooks: {
+      Stop: [
+        {
+          type: "command",
+          command: `node ${indexerCliVscodePath}`,
+        },
+      ],
+    },
+  };
+
+  ensureDir(path.dirname(hooksPath));
+  fs.writeFileSync(hooksPath, JSON.stringify(config, null, 2) + "\n", "utf8");
+  return { hooksPath, existed };
+}
+
+/**
+ * Removes the VS Code Stop hook file.
+ */
+function uninstallVscodeHook(): "done" | "not_found" {
+  const hooksPath = getVscodeHooksPath();
+  if (!fs.existsSync(hooksPath)) return "not_found";
+  fs.unlinkSync(hooksPath);
+  // Remove the directory if empty
+  try {
+    const dir = path.dirname(hooksPath);
+    if (fs.readdirSync(dir).length === 0) fs.rmdirSync(dir);
+  } catch { /* ignore */ }
+  return "done";
+}
+
+function checkVscodeHookInstalled(): boolean {
+  const hooksPath = getVscodeHooksPath();
+  try {
+    const config = JSON.parse(fs.readFileSync(hooksPath, "utf8")) as {
+      hooks?: Record<string, unknown[]>;
+    };
+    const stop = config.hooks?.Stop;
+    if (!Array.isArray(stop)) return false;
+    return stop.some((entry: unknown) => {
+      if (!entry || typeof entry !== "object") return false;
+      const e = entry as Record<string, unknown>;
+      return typeof e.command === "string" && e.command.includes("indexer-cli-vscode");
+    });
+  } catch { return false; }
+}
+
+// ---------------------------------------------------------------------------
+// VS Code — hook location registration
+// ---------------------------------------------------------------------------
+
+/**
+ * Returns the VS Code hooks path as a ~-prefixed string.
+ * VS Code supports ~ in hookFilesLocations, which improves portability across
+ * machines and avoids VS Code showing the fully-expanded path as an error.
+ */
+function getVscodeHooksPathTilde(): string {
+  const hooksPath = getVscodeHooksPath();
+  const home = os.homedir();
+  if (hooksPath.startsWith(home + path.sep)) {
+    return "~" + hooksPath.slice(home.length);
+  }
+  return hooksPath;
+}
+
+/**
+ * Adds the hook file path to VS Code's settings.json under
+ * `chat.hookFilesLocations` so VS Code discovers our hook.
+ * Uses a ~-prefixed path for portability.
+ */
+function installVscodeHookLocation(): { settingsPath: string; existed: boolean } {
+  const settingsPath = getVscodeSettingsPath();
+  const existed = fs.existsSync(settingsPath);
+
+  let settings: Record<string, unknown> = {};
+  if (existed) {
+    try {
+      settings = parseJsonc(fs.readFileSync(settingsPath, "utf8")) as Record<string, unknown>;
+    } catch {
+      throw new Error(`Could not parse existing ${settingsPath} — please check it is valid JSON.`);
+    }
+  }
+
+  const hookLocations = (settings["chat.hookFilesLocations"] ?? {}) as Record<string, boolean>;
+  // Remove any previously installed absolute path entry (migration)
+  const absolutePath = getVscodeHooksPath();
+  if (absolutePath in hookLocations) {
+    delete hookLocations[absolutePath];
+  }
+  hookLocations[getVscodeHooksPathTilde()] = true;
+  settings["chat.hookFilesLocations"] = hookLocations;
+
+  ensureDir(path.dirname(settingsPath));
+  fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + "\n", "utf8");
+  return { settingsPath, existed };
+}
+
+/**
+ * Removes our hook file path from VS Code's `chat.hookFilesLocations` setting.
+ * Handles both ~ and absolute path variants.
+ */
+function uninstallVscodeHookLocation(): "done" | "not_found" {
+  const settingsPath = getVscodeSettingsPath();
+  if (!fs.existsSync(settingsPath)) return "not_found";
+  try {
+    const settings = parseJsonc(fs.readFileSync(settingsPath, "utf8")) as Record<string, unknown>;
+    const hookLocations = settings["chat.hookFilesLocations"] as Record<string, boolean> | undefined;
+    if (!hookLocations) return "not_found";
+    const tildePath = getVscodeHooksPathTilde();
+    const absolutePath = getVscodeHooksPath();
+    const foundTilde = tildePath in hookLocations;
+    const foundAbsolute = absolutePath in hookLocations;
+    if (!foundTilde && !foundAbsolute) return "not_found";
+    if (foundTilde) delete hookLocations[tildePath];
+    if (foundAbsolute) delete hookLocations[absolutePath];
+    settings["chat.hookFilesLocations"] = hookLocations;
+    fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + "\n", "utf8");
+    return "done";
+  } catch {
+    return "not_found";
+  }
+}
+
+function checkVscodeHookLocationRegistered(): boolean {
+  const settingsPath = getVscodeSettingsPath();
+  try {
+    const settings = parseJsonc(fs.readFileSync(settingsPath, "utf8")) as Record<string, unknown>;
+    const hookLocations = settings["chat.hookFilesLocations"] as Record<string, boolean> | undefined;
+    if (!hookLocations) return false;
+    return hookLocations[getVscodeHooksPathTilde()] === true ||
+      hookLocations[getVscodeHooksPath()] === true;
+  } catch { return false; }
+}
+
+// ---------------------------------------------------------------------------
+// VS Code — MCP config
+// ---------------------------------------------------------------------------
+
+/**
+ * Merges the code-session-memory MCP entry into VS Code's mcp.json.
+ */
+function installVscodeMcpConfig(mcpServerPath: string): { configPath: string; existed: boolean } {
+  const configPath = getVscodeMcpConfigPath();
+  const existed = fs.existsSync(configPath);
+
+  let config: Record<string, unknown> = {};
+  if (existed) {
+    try {
+      config = JSON.parse(fs.readFileSync(configPath, "utf8"));
+    } catch {
+      throw new Error(`Could not parse existing ${configPath} — please check it is valid JSON.`);
+    }
+  }
+
+  if (!config.servers || typeof config.servers !== "object") config.servers = {};
+  (config.servers as Record<string, unknown>)["code-session-memory"] = {
+    type: "stdio",
+    command: "node",
+    args: [mcpServerPath],
+  };
+
+  ensureDir(path.dirname(configPath));
+  fs.writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n", "utf8");
+  return { configPath, existed };
+}
+
+/**
+ * Removes the code-session-memory MCP entry from VS Code's mcp.json.
+ */
+function uninstallVscodeMcpConfig(): "done" | "not_found" {
+  const configPath = getVscodeMcpConfigPath();
+  if (!fs.existsSync(configPath)) return "not_found";
+  try {
+    const config = JSON.parse(fs.readFileSync(configPath, "utf8")) as Record<string, unknown>;
+    if (
+      config.servers &&
+      typeof config.servers === "object" &&
+      "code-session-memory" in (config.servers as object)
+    ) {
+      delete (config.servers as Record<string, unknown>)["code-session-memory"];
+      fs.writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n", "utf8");
+      return "done";
+    }
+    return "not_found";
+  } catch {
+    return "not_found";
+  }
+}
+
+function checkVscodeMcpConfigured(): boolean {
+  const configPath = getVscodeMcpConfigPath();
+  try {
+    const config = JSON.parse(fs.readFileSync(configPath, "utf8")) as Record<string, unknown>;
+    return !!(
+      config.servers &&
+      typeof config.servers === "object" &&
+      "code-session-memory" in (config.servers as object)
+    );
+  } catch { return false; }
+}
+
+// ---------------------------------------------------------------------------
 // Formatting helpers
 // ---------------------------------------------------------------------------
 
@@ -673,6 +932,7 @@ function install(): void {
   const mcpPath = getMcpServerPath();
   const indexerClaudePath = getIndexerCliClaudePath();
   const indexerCursorPath = getIndexerCliCursorPath();
+  const indexerVscodePath = getIndexerCliVscodePath();
 
   // 1. DB
   step("Initialising database", () => {
@@ -738,6 +998,24 @@ function install(): void {
     return `${existed ? "updated" : "created"} ${dstPath}`;
   });
 
+  // 11. VS Code MCP config
+  step("Configuring VS Code MCP server", () => {
+    const { configPath, existed } = installVscodeMcpConfig(mcpPath);
+    return `${existed ? "updated" : "created"} ${configPath}`;
+  });
+
+  // 12. VS Code Stop hook
+  step("Installing VS Code Stop hook", () => {
+    const { hooksPath, existed } = installVscodeHook(indexerVscodePath);
+    return `${existed ? "updated" : "created"} ${hooksPath}`;
+  });
+
+  // 13. VS Code hook location registration
+  step("Registering VS Code hook location", () => {
+    const { settingsPath, existed } = installVscodeHookLocation();
+    return `${existed ? "updated" : "created"} ${settingsPath}`;
+  });
+
   console.log(`
 ${bold("Installation complete!")}
 
@@ -746,7 +1024,9 @@ ${bold("Required environment variable:")}
 
 ${bold("Default DB path:")} ${dbPath}
 
-Restart ${bold("OpenCode")}, ${bold("Claude Code")}, and ${bold("Cursor")} to activate.
+Restart ${bold("OpenCode")}, ${bold("Claude Code")}, ${bold("Cursor")}, and ${bold("VS Code")} to activate.
+
+${bold("VS Code note:")} Ensure ${bold("Chat: Use Hooks")} is enabled in VS Code settings.
 Run ${bold("npx code-session-memory status")} to verify.
 `);
 }
@@ -771,6 +1051,11 @@ function status(): void {
   console.log(`  ${ok(checkCursorMcpConfigured())}  MCP config  ${dim(getCursorMcpConfigPath())}`);
   console.log(`  ${ok(checkCursorHookInstalled())}  Stop hook   ${dim(getCursorHooksPath())}`);
   console.log(`  ${ok(fs.existsSync(getCursorSkillDst()))}  Skill       ${dim(getCursorSkillDst())}`);
+
+  console.log(bold("\n  VS Code"));
+  console.log(`  ${ok(checkVscodeMcpConfigured())}  MCP config  ${dim(getVscodeMcpConfigPath())}`);
+  console.log(`  ${ok(checkVscodeHookInstalled())}  Stop hook   ${dim(getVscodeHooksPath())}`);
+  console.log(`  ${ok(checkVscodeHookLocationRegistered())}  Hook loc    ${dim(getVscodeSettingsPath())}`);
 
   console.log(bold("\n  Shared"));
   console.log(`  ${ok(fs.existsSync(mcpPath))}  MCP server  ${dim(mcpPath)}`);
@@ -807,6 +1092,9 @@ function status(): void {
     checkCursorMcpConfigured() &&
     checkCursorHookInstalled() &&
     fs.existsSync(getCursorSkillDst()) &&
+    checkVscodeMcpConfigured() &&
+    checkVscodeHookInstalled() &&
+    checkVscodeHookLocationRegistered() &&
     fs.existsSync(mcpPath) &&
     fs.existsSync(dbPath);
 
@@ -850,6 +1138,15 @@ function uninstall(): void {
     }],
     ["Cursor skill", () => {
       if (uninstallCursorSkill() === "not_found") throw new Error("not found");
+    }],
+    ["VS Code MCP config", () => {
+      if (uninstallVscodeMcpConfig() === "not_found") throw new Error("not found");
+    }],
+    ["VS Code Stop hook", () => {
+      if (uninstallVscodeHook() === "not_found") throw new Error("not found");
+    }],
+    ["VS Code hook location", () => {
+      if (uninstallVscodeHookLocation() === "not_found") throw new Error("not found");
     }],
   ];
 
