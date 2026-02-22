@@ -6,26 +6,7 @@ Every time the AI agent finishes its turn, `code-session-memory` automatically i
 
 ## How it works
 
-```
-OpenCode (session.idle)   Claude Code (Stop hook)   Cursor (stop hook)   VS Code (Stop hook)   Codex (notify hook)   Gemini CLI (AfterAgent)
-        │                          │                       │                     │                      │                      │
-        │ REST API messages        │ JSONL transcript      │ JSONL transcript    │ JSONL transcript     │ JSONL session        │ JSON session
-        ▼                          ▼                       ▼                     ▼                      ▼                      ▼
-session-to-md           transcript-to-messages   cursor-transcript-to-messages  vscode-transcript-to-messages  codex-session-to-messages  gemini-session-to-messages
-        │                          │                       │                     │                      │                      │
-        └──────────────────────────┴───────────────────────┴─────────────────────┴──────────────────────┴──────────────────────┘
-                                    ▼
-                         chunker  →  heading-aware chunks (≤1000 tokens, 10% overlap)
-                                    │
-                                    ▼
-                         embedder  →  OpenAI text-embedding-3-large (3072 dims)
-                                    │    (all chunks batched in a single API call per turn)
-                                    ▼
-                         sqlite-vec DB  →  ~/.local/share/code-session-memory/sessions.db
-                                    │
-                                    ▼
-                         MCP server  →  query_sessions / get_session_chunks tools
-```
+![Architecture](https://raw.githubusercontent.com/djannot/code-session-memory/main/docs/architecture.svg)
 
 Only **new messages** are indexed on each turn — previously indexed messages are skipped (tracked via `sessions_meta` table). This makes each indexing pass fast, even in long sessions.
 
