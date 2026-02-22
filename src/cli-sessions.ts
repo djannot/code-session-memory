@@ -19,6 +19,8 @@ import {
   SessionFilter,
 } from "./database";
 import type { SessionSource } from "./types";
+import { compactSession } from "./session-compactor";
+import { copyToClipboard } from "./clipboard";
 
 // ---------------------------------------------------------------------------
 // Formatting helpers
@@ -253,9 +255,10 @@ async function sessionActionLoop(session: SessionRow): Promise<"back" | "exit"> 
     const action = await clack.select<string>({
       message: "What would you like to do?",
       options: [
-        { value: "print",  label: "Print session",  hint: "output all chunks to stdout" },
-        { value: "delete", label: "Delete session",  hint: "remove from DB" },
-        { value: "back",   label: "Back to list" },
+        { value: "print",   label: "Print session",       hint: "output all chunks to stdout" },
+        { value: "compact", label: "Compact for restart",  hint: "summarize and copy to clipboard" },
+        { value: "delete",  label: "Delete session",       hint: "remove from DB" },
+        { value: "back",    label: "Back to list" },
       ],
     });
 
@@ -265,6 +268,12 @@ async function sessionActionLoop(session: SessionRow): Promise<"back" | "exit"> 
       clack.outro(dim("Printing session…"));
       printSession(session.session_id);
       return "exit";
+    }
+
+    if (action === "compact") {
+      const result = await runCompact(session);
+      if (result === "exit") return "exit";
+      continue;
     }
 
     if (action === "delete") {
@@ -286,6 +295,72 @@ async function sessionActionLoop(session: SessionRow): Promise<"back" | "exit"> 
     }
   }
 }
+
+// ---------------------------------------------------------------------------
+// Compact flow
+// ---------------------------------------------------------------------------
+
+/**
+ * Runs the compact-for-restart flow for a session.
+ * Summarizes the session with OpenAI and copies the result to the clipboard.
+ * Returns "continue" (stay in action loop) or "exit" (done).
+ */
+async function runCompact(
+  session: SessionRow,
+): Promise<"continue" | "exit"> {
+  // Guard: OPENAI_API_KEY must be set.
+  if (!process.env.OPENAI_API_KEY) {
+    clack.log.error(
+      "OPENAI_API_KEY is not set. Please export it and try again.",
+    );
+    return "continue";
+  }
+
+  // Load chunks from DB.
+  const chunks = withDb((db) => getSessionChunksOrdered(db, session.session_id));
+
+  if (chunks.length === 0) {
+    clack.log.warn("Session has no indexed chunks to compact.");
+    return "continue";
+  }
+
+  // Summarize.
+  const spinner = clack.spinner();
+  spinner.start(
+    `Compacting ${fmtChunks(chunks.length)} with OpenAI…`,
+  );
+
+  let compactResult: Awaited<ReturnType<typeof compactSession>>;
+  try {
+    compactResult = await compactSession(chunks);
+    spinner.stop(
+      `Compacted in ${compactResult.passes} pass${compactResult.passes !== 1 ? "es" : ""} (${compactResult.model}).`,
+    );
+    clack.log.info(
+      `Token usage: input ${compactResult.usage.inputTokens}, output ${compactResult.usage.outputTokens}, total ${compactResult.usage.totalTokens}.`,
+    );
+  } catch (err) {
+    spinner.stop("Compaction failed.");
+    const msg = err instanceof Error ? err.message : String(err);
+    clack.log.error(`OpenAI error: ${msg}`);
+    return "continue";
+  }
+
+  // Copy to clipboard.
+  const clipResult = copyToClipboard(compactResult.summary);
+  if (clipResult.ok) {
+    clack.log.success("Compact summary copied to clipboard.");
+  } else {
+    clack.log.warn(
+      `Could not copy to clipboard (${clipResult.error}).\nPrinting summary to stdout instead:\n`,
+    );
+    console.log(compactResult.summary);
+    clack.log.info("Copy the output above and paste it into a new session.");
+  }
+
+  return "continue";
+}
+
 
 // ---------------------------------------------------------------------------
 // sessions list
@@ -561,6 +636,15 @@ ${b("Usage:")}
   npx code-session-memory sessions purge          Delete sessions older than N days (interactive)
   npx code-session-memory sessions purge --days <n>         Non-interactive, prompts for confirmation
   npx code-session-memory sessions purge --days <n> --yes   Fully non-interactive (no confirmation)
+
+${b("Interactive actions (available after selecting a session):")}
+  Compact for restart   Summarize the session with OpenAI and copy the result
+                        to the clipboard, ready to paste into a new session.
+
+${b("Environment variables (compact):")}
+  OPENAI_API_KEY                  Required for compaction.
+  OPENAI_SUMMARY_MODEL            Override the summarizer model (default: gpt-5-nano).
+  CSM_SUMMARY_MAX_OUTPUT_TOKENS   Override max output tokens (default: 5000).
 
 ${b("Notes:")}
   - Deleting a session only removes it from the DB. If the source files still

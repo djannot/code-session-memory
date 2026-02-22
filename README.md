@@ -214,8 +214,22 @@ npx code-session-memory sessions           # interactive browser (source → dat
 
 The interactive browser lists all sessions with their title, date, source tool, and chunk count. Select a session to:
 - **Print** — dump all chunks to stdout (useful for piping or inspection)
+- **Compact for restart** — summarize the session with OpenAI and copy the result to your clipboard, ready to paste into a new session of any tool
 - **Delete** — remove the session from the DB (with confirmation)
 - **Back** — return to the session list
+
+#### Compact for restart
+
+The "Compact for restart" action generates a structured restart document containing:
+- **Context** — what was being built or fixed
+- **Key Decisions** — architectural and implementation choices
+- **Current State** — what is completed and what is in progress
+- **Unresolved Issues** — blockers and open questions
+
+For long sessions the compactor uses a map-reduce strategy: it splits the transcript into windows, summarizes each independently, then merges the partial summaries into a final digest.
+
+Requires `OPENAI_API_KEY`. Uses `gpt-5-nano` by default (override with `OPENAI_SUMMARY_MODEL`).
+After compaction, the CLI prints total token usage (`input`, `output`, `total`).
 
 You can also `print` or `delete` directly. Without an ID, an interactive picker opens:
 
@@ -265,7 +279,7 @@ Show me how we solved the TypeScript config issue.
 
 | Variable | Default | Description |
 |---|---|---|
-| `OPENAI_API_KEY` | — | **Required.** Used for embedding generation. |
+| `OPENAI_API_KEY` | — | **Required.** Used for embedding generation and session compaction. |
 | `OPENCODE_MEMORY_DB_PATH` | `~/.local/share/code-session-memory/sessions.db` | Override the database path. |
 | `OPENCODE_CONFIG_DIR` | `~/.config/opencode` | Override the OpenCode config directory. |
 | `CLAUDE_CONFIG_DIR` | `~/.claude` | Override the Claude Code config directory. |
@@ -273,6 +287,8 @@ Show me how we solved the TypeScript config issue.
 | `VSCODE_CONFIG_DIR` | `~/.config/Code/User` (Linux) / `~/Library/Application Support/Code/User` (macOS) | Override the VS Code config directory. |
 | `CODEX_HOME` | `~/.codex` | Override the Codex home directory. |
 | `OPENAI_MODEL` | `text-embedding-3-large` | Override the embedding model. |
+| `OPENAI_SUMMARY_MODEL` | `gpt-5-nano` | Override the model used for session compaction (Compact for restart). |
+| `CSM_SUMMARY_MAX_OUTPUT_TOKENS` | `5000` | Override the max output token budget for session compaction. |
 
 ### Database path
 
