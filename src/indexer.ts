@@ -33,7 +33,7 @@ export interface IndexerOptions {
  * @param db        Already-open database connection (caller manages lifecycle)
  * @param session   Session metadata (id, title, directory)
  * @param messages  All messages in the session
- * @param source    Which tool produced the session ("opencode" | "claude-code")
+ * @param source    Which tool produced the session ("opencode" | "claude-code" | "cursor" | "vscode" | "codex")
  * @param options   Optional overrides for API key / model
  */
 export async function indexNewMessages(

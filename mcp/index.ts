@@ -3,7 +3,7 @@
  * code-session-memory MCP server (stdio transport).
  *
  * Exposes two tools:
- *   - query_sessions     — semantic search across indexed sessions (OpenCode + Claude Code)
+ *   - query_sessions     — semantic search across indexed sessions
  *   - get_session_chunks — retrieve ordered chunks for a specific session URL
  *
  * Environment variables:
@@ -27,30 +27,31 @@ import { createSqliteProvider, createToolHandlers } from "./server";
 // ---------------------------------------------------------------------------
 
 const dbPath = resolveDbPath();
-const openAiApiKey = process.env.OPENAI_API_KEY;
 const openAiModel = process.env.OPENAI_MODEL ?? "text-embedding-3-large";
-
-if (!openAiApiKey) {
-  console.error("Error: OPENAI_API_KEY environment variable is required.");
-  process.exit(1);
-}
-
-if (!fs.existsSync(dbPath)) {
-  console.error(
-    `Error: Database not found at ${dbPath}.\nRun "npx code-session-memory install" first.`,
-  );
-  process.exit(1);
-}
 
 // ---------------------------------------------------------------------------
 // Embedding function
 // ---------------------------------------------------------------------------
 
-const openai = new OpenAI({ apiKey: openAiApiKey });
+let openaiClient: OpenAI | null = null;
+
+function getOpenAiClient(): OpenAI {
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) {
+    throw new Error(
+      "OPENAI_API_KEY environment variable is required for query_sessions.",
+    );
+  }
+  if (!openaiClient) {
+    openaiClient = new OpenAI({ apiKey });
+  }
+  return openaiClient;
+}
 
 async function createEmbedding(text: string): Promise<number[]> {
   const MAX_CHARS = 8191 * 4;
   const input = text.length > MAX_CHARS ? text.slice(0, MAX_CHARS) : text;
+  const openai = getOpenAiClient();
   const response = await openai.embeddings.create({ model: openAiModel, input });
   const embedding = response.data?.[0]?.embedding;
   if (!embedding) throw new Error("No embedding returned from OpenAI API");
@@ -89,7 +90,7 @@ const server = new McpServer({
 const querySessionsSchema = {
   queryText: z.string().min(1).describe("Natural language description of what you are looking for."),
   project: z.string().optional().describe("Filter results to a specific project directory path (e.g. '/Users/me/myproject'). Optional."),
-  source: z.enum(["opencode", "claude-code", "cursor", "vscode"]).optional().describe("Filter results by tool source: 'opencode', 'claude-code', 'cursor', or 'vscode'. Optional — omit to search across all."),
+  source: z.enum(["opencode", "claude-code", "cursor", "vscode", "codex"]).optional().describe("Filter results by tool source: 'opencode', 'claude-code', 'cursor', 'vscode', or 'codex'. Optional — omit to search across all."),
   limit: z.number().int().min(1).optional().describe("Maximum number of results to return. Defaults to 5."),
   fromDate: z.string().optional().describe("Return only chunks indexed on or after this date. ISO 8601 format, e.g. '2026-02-01' or '2026-02-20T15:00:00Z'. Optional."),
   toDate: z.string().optional().describe("Return only chunks indexed on or before this date. ISO 8601 format, e.g. '2026-02-20'. A date-only value is treated as end-of-day UTC. Optional."),
@@ -107,7 +108,7 @@ const serverAny = server as any;
 
 serverAny.tool(
   "query_sessions",
-  "Semantically search across all indexed sessions stored in the vector database. Returns the most relevant chunks from past sessions. Sessions from both OpenCode and Claude Code are indexed into the same shared database.",
+  "Semantically search across all indexed sessions stored in the vector database. Returns the most relevant chunks from past sessions. Sessions from OpenCode, Claude Code, Cursor, VS Code, and Codex are indexed into the same shared database.",
   querySessionsSchema,
   async (args: { queryText: string; project?: string; source?: string; limit?: number; fromDate?: string; toDate?: string }) => {
     // Parse ISO 8601 date strings into unix milliseconds.

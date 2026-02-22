@@ -39,6 +39,8 @@ function fmtDate(unixMs: number): string {
 function fmtSource(source: string): string {
   if (source === "opencode")    return cyan("opencode");
   if (source === "cursor")      return green("cursor");
+  if (source === "vscode")      return yellow("vscode");
+  if (source === "codex")       return yellow("codex");
   return yellow("claude-code");
 }
 
@@ -221,6 +223,8 @@ async function pickSessionTree(allSessions: SessionRow[]): Promise<PickResult> {
 function sourceLabelText(source: string): string {
   if (source === "opencode")    return "OpenCode";
   if (source === "cursor")      return "Cursor";
+  if (source === "vscode")      return "VS Code";
+  if (source === "codex")       return "Codex";
   if (source === "claude-code") return "Claude Code";
   return source;
 }

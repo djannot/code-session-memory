@@ -1,0 +1,10 @@
+{"timestamp":"2026-02-22T09:29:21.824Z","type":"session_meta","payload":{"id":"test-session-001","timestamp":"2026-02-22T09:29:15.499Z","cwd":"/test/project","originator":"Codex Desktop","cli_version":"0.104.0","model_provider":"openai"}}
+{"timestamp":"2026-02-22T09:29:21.825Z","type":"response_item","payload":{"type":"message","role":"developer","content":[{"type":"input_text","text":"<permissions instructions>...system content...</permissions instructions>"}]}}
+{"timestamp":"2026-02-22T09:29:21.825Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"<environment_context>\n  <cwd>/test/project</cwd>\n</environment_context>"}]}}
+{"timestamp":"2026-02-22T09:29:21.826Z","type":"event_msg","payload":{"type":"task_started","turn_id":"turn-abc-001","model_context_window":258400,"collaboration_mode_kind":"default"}}
+{"timestamp":"2026-02-22T09:29:21.826Z","type":"event_msg","payload":{"type":"user_message","message":"What's this project about?","images":[],"local_images":[],"text_elements":[]}}
+{"timestamp":"2026-02-22T09:29:26.259Z","type":"response_item","payload":{"type":"function_call","name":"exec_command","arguments":"{\"cmd\":\"ls -la\"}","call_id":"call-001"}}
+{"timestamp":"2026-02-22T09:29:26.409Z","type":"response_item","payload":{"type":"function_call_output","call_id":"call-001","output":"total 16\ndrwxr-xr-x  4 user  staff  128 Feb 22 09:29 .\n-rw-r--r--  1 user  staff  512 Feb 22 09:29 README.md"}}
+{"timestamp":"2026-02-22T09:29:26.248Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"I'll quickly inspect the repo."}],"phase":"commentary"}}
+{"timestamp":"2026-02-22T09:29:43.649Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"This is a test project with a README."}],"phase":"final_answer"}}
+{"timestamp":"2026-02-22T09:29:43.669Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-abc-001","last_agent_message":"This is a test project with a README."}}

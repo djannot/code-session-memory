@@ -7,6 +7,7 @@
  * Usage:
  *   npx code-session-memory query "authentication middleware"
  *   npx code-session-memory query "auth flow" --source opencode
+ *   npx code-session-memory query "session summary" --source codex
  *   npx code-session-memory query "migration" --limit 10
  *   npx code-session-memory query "error handling" --from 2026-02-01 --to 2026-02-20
  *
@@ -55,9 +56,15 @@ export function parseQueryArgs(args: string[]): QueryOptions {
 
     if (arg === "--source") {
       const val = args[++i];
-      if (!val) throw new Error("--source requires a value (opencode, claude-code, cursor, vscode)");
-      if (val !== "opencode" && val !== "claude-code" && val !== "cursor" && val !== "vscode") {
-        throw new Error(`Invalid --source "${val}". Must be one of: opencode, claude-code, cursor, vscode`);
+      if (!val) throw new Error("--source requires a value (opencode, claude-code, cursor, vscode, codex)");
+      if (
+        val !== "opencode" &&
+        val !== "claude-code" &&
+        val !== "cursor" &&
+        val !== "vscode" &&
+        val !== "codex"
+      ) {
+        throw new Error(`Invalid --source "${val}". Must be one of: opencode, claude-code, cursor, vscode, codex`);
       }
       source = val;
     } else if (arg === "--limit") {

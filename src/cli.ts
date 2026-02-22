@@ -3,7 +3,7 @@
  * code-session-memory CLI
  *
  * Usage:
- *   npx code-session-memory install        — install for OpenCode + Claude Code
+ *   npx code-session-memory install        — install for all detected supported tools
  *   npx code-session-memory status         — show installation status
  *   npx code-session-memory uninstall      — remove all installed components
  *   npx code-session-memory reset-db       — wipe the database (with confirmation)
@@ -14,6 +14,7 @@ import fs from "fs";
 import path from "path";
 import os from "os";
 import * as clack from "@clack/prompts";
+import { parse as parseToml, stringify as stringifyToml } from "smol-toml";
 import { resolveDbPath, openDatabase } from "./database";
 import { cmdSessions } from "./cli-sessions";
 import { cmdQuery } from "./cli-query";
@@ -104,6 +105,10 @@ function getIndexerCliVscodePath(): string {
   return path.join(getPackageRoot(), "dist", "src", "indexer-cli-vscode.js");
 }
 
+function getIndexerCliCodexPath(): string {
+  return path.join(getPackageRoot(), "dist", "src", "indexer-cli-codex.js");
+}
+
 // ---------------------------------------------------------------------------
 // Paths — Cursor
 // ---------------------------------------------------------------------------
@@ -154,6 +159,24 @@ function getVscodeMcpConfigPath(): string {
 
 function getVscodeHooksPath(): string {
   return path.join(getVscodeConfigDir(), "hooks", "code-session-memory.json");
+}
+
+// ---------------------------------------------------------------------------
+// Paths — Codex
+// ---------------------------------------------------------------------------
+
+function getCodexConfigDir(): string {
+  const envDir = process.env.CODEX_HOME;
+  if (envDir) return envDir;
+  return path.join(os.homedir(), ".codex");
+}
+
+function getCodexConfigPath(): string {
+  return path.join(getCodexConfigDir(), "config.toml");
+}
+
+function getCodexSkillDst(): string {
+  return path.join(getCodexConfigDir(), "skills", "code-session-memory", "SKILL.md");
 }
 
 // ---------------------------------------------------------------------------
@@ -660,7 +683,7 @@ function installCursorSkill(skillSrc: string): { dstPath: string; existed: boole
   const cursorFrontmatter = [
     "---",
     "name: code-session-memory",
-    "description: Search past AI coding sessions semantically across OpenCode, Claude Code, and Cursor. Use this when the user asks about past work, decisions, or implementations.",
+    "description: Search past AI coding sessions semantically across OpenCode, Claude Code, Cursor, VS Code, and Codex. Use this when the user asks about past work, decisions, or implementations.",
     "---",
     "",
   ].join("\n");
@@ -900,6 +923,177 @@ function checkVscodeMcpConfigured(): boolean {
 }
 
 // ---------------------------------------------------------------------------
+// Codex — config.toml (TOML)
+// ---------------------------------------------------------------------------
+
+function parseCodexConfigOrEmpty(configPath: string): Record<string, unknown> {
+  if (!fs.existsSync(configPath)) return {};
+  try {
+    return parseToml(fs.readFileSync(configPath, "utf8")) as Record<string, unknown>;
+  } catch {
+    throw new Error(`Could not parse existing ${configPath} — please check it is valid TOML.`);
+  }
+}
+
+function mergeCodexEnvVarsPassthrough(existing: unknown): string[] {
+  const values = Array.isArray(existing)
+    ? existing.filter((v): v is string => typeof v === "string" && v.trim().length > 0)
+    : [];
+  if (!values.includes("OPENAI_API_KEY")) values.push("OPENAI_API_KEY");
+  return values;
+}
+
+function installCodexMcpConfig(mcpServerPath: string): { configPath: string; existed: boolean } {
+  const configPath = getCodexConfigPath();
+  const existed = fs.existsSync(configPath);
+  const config = parseCodexConfigOrEmpty(configPath);
+
+  const mcpServersRaw = config.mcp_servers;
+  const mcpServers =
+    mcpServersRaw && typeof mcpServersRaw === "object"
+      ? mcpServersRaw as Record<string, unknown>
+      : {};
+  const existingServer = mcpServers["code-session-memory"];
+  const serverConfig =
+    existingServer && typeof existingServer === "object"
+      ? existingServer as Record<string, unknown>
+      : {};
+
+  mcpServers["code-session-memory"] = {
+    ...serverConfig,
+    command: "node",
+    args: [mcpServerPath],
+    // Codex MCP servers run with a restricted environment by default.
+    // Pass-through env vars are configured via env_vars (env is a map of fixed values).
+    env_vars: mergeCodexEnvVarsPassthrough(serverConfig.env_vars),
+  };
+  config.mcp_servers = mcpServers;
+
+  ensureDir(path.dirname(configPath));
+  fs.writeFileSync(configPath, stringifyToml(config) + "\n", "utf8");
+  return { configPath, existed };
+}
+
+function uninstallCodexMcpConfig(): "done" | "not_found" {
+  const configPath = getCodexConfigPath();
+  if (!fs.existsSync(configPath)) return "not_found";
+  try {
+    const config = parseToml(fs.readFileSync(configPath, "utf8")) as Record<string, unknown>;
+    const mcpServers = config.mcp_servers as Record<string, unknown> | undefined;
+    if (!mcpServers || !(Object.prototype.hasOwnProperty.call(mcpServers, "code-session-memory"))) {
+      return "not_found";
+    }
+    delete mcpServers["code-session-memory"];
+    fs.writeFileSync(configPath, stringifyToml(config) + "\n", "utf8");
+    return "done";
+  } catch {
+    return "not_found";
+  }
+}
+
+function checkCodexMcpConfigured(): boolean {
+  const configPath = getCodexConfigPath();
+  try {
+    const config = parseToml(fs.readFileSync(configPath, "utf8")) as Record<string, unknown>;
+    const mcpServers = config.mcp_servers as Record<string, unknown> | undefined;
+    return !!(mcpServers && Object.prototype.hasOwnProperty.call(mcpServers, "code-session-memory"));
+  } catch {
+    return false;
+  }
+}
+
+function checkCodexOpenAiPassthroughConfigured(): boolean {
+  const configPath = getCodexConfigPath();
+  try {
+    const config = parseToml(fs.readFileSync(configPath, "utf8")) as Record<string, unknown>;
+    const mcpServers = config.mcp_servers as Record<string, unknown> | undefined;
+    const server = mcpServers?.["code-session-memory"];
+    if (!server || typeof server !== "object") return false;
+    const envVars = (server as Record<string, unknown>).env_vars;
+    return Array.isArray(envVars) && envVars.includes("OPENAI_API_KEY");
+  } catch {
+    return false;
+  }
+}
+
+function installCodexHook(indexerCliCodexPath: string): { configPath: string; existed: boolean } {
+  const configPath = getCodexConfigPath();
+  const existed = fs.existsSync(configPath);
+  const config = parseCodexConfigOrEmpty(configPath);
+
+  config.notify = ["node", indexerCliCodexPath];
+
+  ensureDir(path.dirname(configPath));
+  fs.writeFileSync(configPath, stringifyToml(config) + "\n", "utf8");
+  return { configPath, existed };
+}
+
+function uninstallCodexHook(): "done" | "not_found" {
+  const configPath = getCodexConfigPath();
+  if (!fs.existsSync(configPath)) return "not_found";
+  try {
+    const config = parseToml(fs.readFileSync(configPath, "utf8")) as Record<string, unknown>;
+    const notify = config.notify;
+    if (!Array.isArray(notify)) return "not_found";
+    const hasOurHook = notify.some((v) => typeof v === "string" && v.includes("indexer-cli-codex"));
+    if (!hasOurHook) return "not_found";
+    delete config.notify;
+    fs.writeFileSync(configPath, stringifyToml(config) + "\n", "utf8");
+    return "done";
+  } catch {
+    return "not_found";
+  }
+}
+
+function checkCodexHookInstalled(): boolean {
+  const configPath = getCodexConfigPath();
+  try {
+    const config = parseToml(fs.readFileSync(configPath, "utf8")) as Record<string, unknown>;
+    const notify = config.notify;
+    if (!Array.isArray(notify)) return false;
+    return notify.some((v) => typeof v === "string" && v.includes("indexer-cli-codex"));
+  } catch {
+    return false;
+  }
+}
+
+function installCodexSkill(skillSrc: string): { dstPath: string; existed: boolean } {
+  const dstPath = getCodexSkillDst();
+  const existed = fs.existsSync(dstPath);
+
+  if (!fs.existsSync(skillSrc)) {
+    throw new Error(`Skill source not found: ${skillSrc}\nDid you run "npm run build" first?`);
+  }
+
+  const skillBody = fs.readFileSync(skillSrc, "utf8");
+  const bodyWithoutFrontmatter = skillBody
+    .replace(/^---[\s\S]*?---\s*\n?/, "")
+    .trimStart();
+  const codexFrontmatter = [
+    "---",
+    "name: code-session-memory",
+    "description: Search past AI coding sessions semantically across OpenCode, Claude Code, Cursor, VS Code, and Codex.",
+    "---",
+    "",
+  ].join("\n");
+
+  ensureDir(path.dirname(dstPath));
+  fs.writeFileSync(dstPath, codexFrontmatter + bodyWithoutFrontmatter, "utf8");
+  return { dstPath, existed };
+}
+
+function uninstallCodexSkill(): "done" | "not_found" {
+  const dstPath = getCodexSkillDst();
+  if (!fs.existsSync(dstPath)) return "not_found";
+  fs.unlinkSync(dstPath);
+  try {
+    const dir = path.dirname(dstPath);
+    if (fs.readdirSync(dir).length === 0) fs.rmdirSync(dir);
+  } catch { /* ignore */ }
+  return "done";
+}
+
+// ---------------------------------------------------------------------------
 // Formatting helpers
 // ---------------------------------------------------------------------------
 
@@ -908,6 +1102,30 @@ function green(s: string): string { return `\x1b[32m${s}\x1b[0m`; }
 function red(s: string): string { return `\x1b[31m${s}\x1b[0m`; }
 function dim(s: string): string { return `\x1b[2m${s}\x1b[0m`; }
 function ok(v: boolean): string { return v ? green("✓") : red("✗"); }
+
+// ---------------------------------------------------------------------------
+// Tool detection
+// ---------------------------------------------------------------------------
+
+function isOpenCodeInstalled(): boolean {
+  return fs.existsSync(getOpenCodeConfigDir());
+}
+
+function isClaudeCodeInstalled(): boolean {
+  return fs.existsSync(getClaudeConfigDir());
+}
+
+function isCursorInstalled(): boolean {
+  return fs.existsSync(getCursorConfigDir());
+}
+
+function isVscodeInstalled(): boolean {
+  return fs.existsSync(getVscodeConfigDir());
+}
+
+function isCodexInstalled(): boolean {
+  return fs.existsSync(getCodexConfigDir());
+}
 
 function step(label: string, fn: () => string): void {
   process.stdout.write(`  ${label}... `);
@@ -919,6 +1137,14 @@ function step(label: string, fn: () => string): void {
     console.error(`  Error: ${err instanceof Error ? err.message : String(err)}`);
     process.exit(1);
   }
+}
+
+function stepIf(condition: boolean, label: string, fn: () => string): void {
+  if (!condition) {
+    console.log(`  ${dim("○")}  ${dim(label)}  ${dim("(tool not detected — skipped)")}`);
+    return;
+  }
+  step(label, fn);
 }
 
 // ---------------------------------------------------------------------------
@@ -933,6 +1159,12 @@ function install(): void {
   const indexerClaudePath = getIndexerCliClaudePath();
   const indexerCursorPath = getIndexerCliCursorPath();
   const indexerVscodePath = getIndexerCliVscodePath();
+  const indexerCodexPath = getIndexerCliCodexPath();
+  const openCodeInstalled = isOpenCodeInstalled();
+  const claudeInstalled = isClaudeCodeInstalled();
+  const cursorInstalled = isCursorInstalled();
+  const vscodeInstalled = isVscodeInstalled();
+  const codexInstalled = isCodexInstalled();
 
   // 1. DB
   step("Initialising database", () => {
@@ -942,78 +1174,86 @@ function install(): void {
     return dbPath;
   });
 
-  // 2. OpenCode plugin
-  step("Installing OpenCode plugin", () => {
+  // OpenCode
+  stepIf(openCodeInstalled, "Installing OpenCode plugin", () => {
     const dst = getOpenCodePluginDst();
     installOpenCodePlugin(getPluginSrc(), dst);
     return dst;
   });
 
-  // 3. OpenCode skill
-  step("Installing OpenCode skill", () => {
+  stepIf(openCodeInstalled, "Installing OpenCode skill", () => {
     const dst = getOpenCodeSkillDst();
     copyFile(getSkillSrc(), dst);
     return dst;
   });
 
-  // 4. OpenCode MCP config
-  step("Configuring OpenCode MCP server", () => {
+  stepIf(openCodeInstalled, "Configuring OpenCode MCP server", () => {
     const { configPath, existed } = installOpenCodeMcpConfig(mcpPath);
     return `${existed ? "updated" : "created"} ${configPath}`;
   });
 
-  // 5. Claude Code MCP config
-  step("Configuring Claude Code MCP server", () => {
+  // Claude Code
+  stepIf(claudeInstalled, "Configuring Claude Code MCP server", () => {
     const { configPath, existed } = installClaudeMcpConfig(mcpPath);
     return `${existed ? "updated" : "created"} ${configPath}`;
   });
 
-  // 6. Claude Code hook
-  step("Installing Claude Code Stop hook", () => {
+  stepIf(claudeInstalled, "Installing Claude Code Stop hook", () => {
     const { settingsPath, existed } = installClaudeHook(indexerClaudePath);
     return `${existed ? "updated" : "created"} ${settingsPath}`;
   });
 
-  // 7. Claude Code CLAUDE.md
-  step("Installing Claude Code context (CLAUDE.md)", () => {
+  stepIf(claudeInstalled, "Installing Claude Code context (CLAUDE.md)", () => {
     const { mdPath, existed } = installClaudeMd(getSkillSrc());
     return `${existed ? "updated" : "created"} ${mdPath}`;
   });
 
-  // 8. Cursor MCP config
-  step("Configuring Cursor MCP server", () => {
+  // Cursor
+  stepIf(cursorInstalled, "Configuring Cursor MCP server", () => {
     const { configPath, existed } = installCursorMcpConfig(mcpPath);
     return `${existed ? "updated" : "created"} ${configPath}`;
   });
 
-  // 9. Cursor stop hook
-  step("Installing Cursor stop hook", () => {
+  stepIf(cursorInstalled, "Installing Cursor stop hook", () => {
     const { hooksPath, existed } = installCursorHook(indexerCursorPath);
     return `${existed ? "updated" : "created"} ${hooksPath}`;
   });
 
-  // 10. Cursor skill
-  step("Installing Cursor skill", () => {
+  stepIf(cursorInstalled, "Installing Cursor skill", () => {
     const { dstPath, existed } = installCursorSkill(getSkillSrc());
     return `${existed ? "updated" : "created"} ${dstPath}`;
   });
 
-  // 11. VS Code MCP config
-  step("Configuring VS Code MCP server", () => {
+  // VS Code
+  stepIf(vscodeInstalled, "Configuring VS Code MCP server", () => {
     const { configPath, existed } = installVscodeMcpConfig(mcpPath);
     return `${existed ? "updated" : "created"} ${configPath}`;
   });
 
-  // 12. VS Code Stop hook
-  step("Installing VS Code Stop hook", () => {
+  stepIf(vscodeInstalled, "Installing VS Code Stop hook", () => {
     const { hooksPath, existed } = installVscodeHook(indexerVscodePath);
     return `${existed ? "updated" : "created"} ${hooksPath}`;
   });
 
-  // 13. VS Code hook location registration
-  step("Registering VS Code hook location", () => {
+  stepIf(vscodeInstalled, "Registering VS Code hook location", () => {
     const { settingsPath, existed } = installVscodeHookLocation();
     return `${existed ? "updated" : "created"} ${settingsPath}`;
+  });
+
+  // Codex
+  stepIf(codexInstalled, "Configuring Codex MCP server", () => {
+    const { configPath, existed } = installCodexMcpConfig(mcpPath);
+    return `${existed ? "updated" : "created"} ${configPath}`;
+  });
+
+  stepIf(codexInstalled, "Installing Codex notify hook", () => {
+    const { configPath, existed } = installCodexHook(indexerCodexPath);
+    return `${existed ? "updated" : "created"} ${configPath}`;
+  });
+
+  stepIf(codexInstalled, "Installing Codex skill", () => {
+    const { dstPath, existed } = installCodexSkill(getSkillSrc());
+    return `${existed ? "updated" : "created"} ${dstPath}`;
   });
 
   console.log(`
@@ -1024,9 +1264,10 @@ ${bold("Required environment variable:")}
 
 ${bold("Default DB path:")} ${dbPath}
 
-Restart ${bold("OpenCode")}, ${bold("Claude Code")}, ${bold("Cursor")}, and ${bold("VS Code")} to activate.
+Restart ${bold("OpenCode")}, ${bold("Claude Code")}, ${bold("Cursor")}, ${bold("VS Code")}, and ${bold("Codex")} to activate.
 
 ${bold("VS Code note:")} Ensure ${bold("Chat: Use Hooks")} is enabled in VS Code settings.
+${bold("Codex note:")} The notify hook and OPENAI_API_KEY passthrough are set in ${dim(getCodexConfigPath())}.
 Run ${bold("npx code-session-memory status")} to verify.
 `);
 }
@@ -1036,26 +1277,57 @@ function status(): void {
 
   const dbPath = resolveDbPath();
   const mcpPath = getMcpServerPath();
+  const openCodeInstalled = isOpenCodeInstalled();
+  const claudeInstalled = isClaudeCodeInstalled();
+  const cursorInstalled = isCursorInstalled();
+  const vscodeInstalled = isVscodeInstalled();
+  const codexInstalled = isCodexInstalled();
 
-  console.log(bold("  OpenCode"));
-  console.log(`  ${ok(fs.existsSync(getOpenCodePluginDst()))}  Plugin      ${dim(getOpenCodePluginDst())}`);
-  console.log(`  ${ok(fs.existsSync(getOpenCodeSkillDst()))}  Skill       ${dim(getOpenCodeSkillDst())}`);
-  console.log(`  ${ok(checkMcpConfigured())}  MCP config  ${dim(getGlobalOpenCodeConfigPath())}`);
+  if (openCodeInstalled) {
+    console.log(bold("  OpenCode"));
+    console.log(`  ${ok(fs.existsSync(getOpenCodePluginDst()))}  Plugin      ${dim(getOpenCodePluginDst())}`);
+    console.log(`  ${ok(fs.existsSync(getOpenCodeSkillDst()))}  Skill       ${dim(getOpenCodeSkillDst())}`);
+    console.log(`  ${ok(checkMcpConfigured())}  MCP config  ${dim(getGlobalOpenCodeConfigPath())}`);
+  } else {
+    console.log(bold("  OpenCode") + dim("  (not installed — skipped)"));
+  }
 
-  console.log(bold("\n  Claude Code"));
-  console.log(`  ${ok(checkClaudeMcpConfigured())}  MCP config  ${dim(getClaudeUserConfigPath())}`);
-  console.log(`  ${ok(checkClaudeHookInstalled())}  Stop hook   ${dim(getClaudeSettingsPath())}`);
-  console.log(`  ${ok(checkClaudeMdInstalled())}  CLAUDE.md   ${dim(getClaudeMdPath())}`);
+  if (claudeInstalled) {
+    console.log(bold("\n  Claude Code"));
+    console.log(`  ${ok(checkClaudeMcpConfigured())}  MCP config  ${dim(getClaudeUserConfigPath())}`);
+    console.log(`  ${ok(checkClaudeHookInstalled())}  Stop hook   ${dim(getClaudeSettingsPath())}`);
+    console.log(`  ${ok(checkClaudeMdInstalled())}  CLAUDE.md   ${dim(getClaudeMdPath())}`);
+  } else {
+    console.log(bold("\n  Claude Code") + dim("  (not installed — skipped)"));
+  }
 
-  console.log(bold("\n  Cursor"));
-  console.log(`  ${ok(checkCursorMcpConfigured())}  MCP config  ${dim(getCursorMcpConfigPath())}`);
-  console.log(`  ${ok(checkCursorHookInstalled())}  Stop hook   ${dim(getCursorHooksPath())}`);
-  console.log(`  ${ok(fs.existsSync(getCursorSkillDst()))}  Skill       ${dim(getCursorSkillDst())}`);
+  if (cursorInstalled) {
+    console.log(bold("\n  Cursor"));
+    console.log(`  ${ok(checkCursorMcpConfigured())}  MCP config  ${dim(getCursorMcpConfigPath())}`);
+    console.log(`  ${ok(checkCursorHookInstalled())}  Stop hook   ${dim(getCursorHooksPath())}`);
+    console.log(`  ${ok(fs.existsSync(getCursorSkillDst()))}  Skill       ${dim(getCursorSkillDst())}`);
+  } else {
+    console.log(bold("\n  Cursor") + dim("  (not installed — skipped)"));
+  }
 
-  console.log(bold("\n  VS Code"));
-  console.log(`  ${ok(checkVscodeMcpConfigured())}  MCP config  ${dim(getVscodeMcpConfigPath())}`);
-  console.log(`  ${ok(checkVscodeHookInstalled())}  Stop hook   ${dim(getVscodeHooksPath())}`);
-  console.log(`  ${ok(checkVscodeHookLocationRegistered())}  Hook loc    ${dim(getVscodeSettingsPath())}`);
+  if (vscodeInstalled) {
+    console.log(bold("\n  VS Code"));
+    console.log(`  ${ok(checkVscodeMcpConfigured())}  MCP config  ${dim(getVscodeMcpConfigPath())}`);
+    console.log(`  ${ok(checkVscodeHookInstalled())}  Stop hook   ${dim(getVscodeHooksPath())}`);
+    console.log(`  ${ok(checkVscodeHookLocationRegistered())}  Hook loc    ${dim(getVscodeSettingsPath())}`);
+  } else {
+    console.log(bold("\n  VS Code") + dim("  (not installed — skipped)"));
+  }
+
+  if (codexInstalled) {
+    console.log(bold("\n  Codex"));
+    console.log(`  ${ok(checkCodexMcpConfigured())}  MCP config  ${dim(getCodexConfigPath())}`);
+    console.log(`  ${ok(checkCodexOpenAiPassthroughConfigured())}  OPENAI_KEY ${dim(getCodexConfigPath())}`);
+    console.log(`  ${ok(checkCodexHookInstalled())}  Notify hook ${dim(getCodexConfigPath())}`);
+    console.log(`  ${ok(fs.existsSync(getCodexSkillDst()))}  Skill       ${dim(getCodexSkillDst())}`);
+  } else {
+    console.log(bold("\n  Codex") + dim("  (not installed — skipped)"));
+  }
 
   console.log(bold("\n  Shared"));
   console.log(`  ${ok(fs.existsSync(mcpPath))}  MCP server  ${dim(mcpPath)}`);
@@ -1083,18 +1355,32 @@ function status(): void {
     } catch { /* DB might be empty */ }
   }
 
-  const allOk = fs.existsSync(getOpenCodePluginDst()) &&
+  const allOk = (!openCodeInstalled || (
+    fs.existsSync(getOpenCodePluginDst()) &&
     fs.existsSync(getOpenCodeSkillDst()) &&
-    checkMcpConfigured() &&
-    checkClaudeMcpConfigured() &&
-    checkClaudeHookInstalled() &&
-    checkClaudeMdInstalled() &&
-    checkCursorMcpConfigured() &&
-    checkCursorHookInstalled() &&
-    fs.existsSync(getCursorSkillDst()) &&
-    checkVscodeMcpConfigured() &&
-    checkVscodeHookInstalled() &&
-    checkVscodeHookLocationRegistered() &&
+    checkMcpConfigured()
+  )) &&
+    (!claudeInstalled || (
+      checkClaudeMcpConfigured() &&
+      checkClaudeHookInstalled() &&
+      checkClaudeMdInstalled()
+    )) &&
+    (!cursorInstalled || (
+      checkCursorMcpConfigured() &&
+      checkCursorHookInstalled() &&
+      fs.existsSync(getCursorSkillDst())
+    )) &&
+    (!vscodeInstalled || (
+      checkVscodeMcpConfigured() &&
+      checkVscodeHookInstalled() &&
+      checkVscodeHookLocationRegistered()
+    )) &&
+    (!codexInstalled || (
+      checkCodexMcpConfigured() &&
+      checkCodexOpenAiPassthroughConfigured() &&
+      checkCodexHookInstalled() &&
+      fs.existsSync(getCodexSkillDst())
+    )) &&
     fs.existsSync(mcpPath) &&
     fs.existsSync(dbPath);
 
@@ -1147,6 +1433,15 @@ function uninstall(): void {
     }],
     ["VS Code hook location", () => {
       if (uninstallVscodeHookLocation() === "not_found") throw new Error("not found");
+    }],
+    ["Codex MCP config", () => {
+      if (uninstallCodexMcpConfig() === "not_found") throw new Error("not found");
+    }],
+    ["Codex notify hook", () => {
+      if (uninstallCodexHook() === "not_found") throw new Error("not found");
+    }],
+    ["Codex skill", () => {
+      if (uninstallCodexSkill() === "not_found") throw new Error("not found");
     }],
   ];
 
@@ -1212,15 +1507,15 @@ async function resetDb(): Promise<void> {
 
 function help(): void {
   console.log(`
-${bold("code-session-memory")} — Shared vector memory for OpenCode, Claude Code, and Cursor sessions
+${bold("code-session-memory")} — Shared vector memory for OpenCode, Claude Code, Cursor, VS Code, and Codex sessions
 
 ${bold("Usage:")}
-  npx code-session-memory install                         Install all components (OpenCode + Claude Code + Cursor)
+  npx code-session-memory install                         Install components for detected tools
   npx code-session-memory status                          Show installation status and DB stats
   npx code-session-memory uninstall                       Remove all installed components (keeps DB)
   npx code-session-memory reset-db                        Delete all indexed data (keeps installation)
   npx code-session-memory query <text>                    Semantic search across all indexed sessions
-  npx code-session-memory query <text> --source <s>       Filter by source (opencode, claude-code, cursor)
+  npx code-session-memory query <text> --source <s>       Filter by source (opencode, claude-code, cursor, vscode, codex)
   npx code-session-memory query <text> --limit <n>        Max results (default: 5)
   npx code-session-memory query <text> --from <date>      Results from date (e.g. 2026-02-01)
   npx code-session-memory query <text> --to <date>        Results up to date (e.g. 2026-02-20)
@@ -1237,6 +1532,8 @@ ${bold("Environment variables:")}
   OPENCODE_CONFIG_DIR       Override the OpenCode config directory
   CLAUDE_CONFIG_DIR         Override the Claude Code config directory
   CURSOR_CONFIG_DIR         Override the Cursor config directory (~/.cursor)
+  VSCODE_CONFIG_DIR         Override the VS Code config directory
+  CODEX_HOME                Override the Codex home directory (~/.codex)
 `);
 }
 

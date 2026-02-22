@@ -105,6 +105,11 @@ describe("parseQueryArgs", () => {
     expect(opts.source).toBe("vscode");
   });
 
+  it("parses --source codex", () => {
+    const opts = parseQueryArgs(["auth", "--source", "codex"]);
+    expect(opts.source).toBe("codex");
+  });
+
   it("throws on invalid --source value", () => {
     expect(() => parseQueryArgs(["auth", "--source", "invalid"])).toThrow('Invalid --source "invalid"');
   });
