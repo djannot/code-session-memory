@@ -222,6 +222,23 @@ describe("cmdSessionsList — action menu", () => {
     expect(values).toContain("delete");
   });
 
+  it("renders Gemini CLI as a source label in the source picker", async () => {
+    await indexNewMessages(
+      makeSession("ses_gemini", "Gemini flow"),
+      [makeMessage("msg_g1", "Gemini assistant output.")],
+      "gemini-cli",
+      { dbPath },
+    );
+
+    mockSelect.mockResolvedValueOnce(CANCEL);
+    await cmdSessionsList();
+
+    const sourceCall = mockSelect.mock.calls[0];
+    const options = sourceCall[0].options as Array<{ label: string }>;
+    const labels = options.map((o) => o.label);
+    expect(labels).toContain("Gemini CLI");
+  });
+
   // ── Test: OPENAI_API_KEY guard ───────────────────────────────────────────
 
   it("shows error and does not call compactSession when OPENAI_API_KEY is missing", async () => {

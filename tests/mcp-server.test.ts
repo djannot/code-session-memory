@@ -177,6 +177,27 @@ describe("createToolHandlers", () => {
       );
     });
 
+    it("passes source filter to querySessions", async () => {
+      const querySessions = vi.fn().mockResolvedValue([]);
+      const handlers = createToolHandlers({
+        createEmbedding: mockEmbedding,
+        querySessions,
+        getSessionChunks: vi.fn().mockResolvedValue([]),
+      });
+      await handlers.querySessionsHandler({
+        queryText: "test",
+        source: "gemini-cli",
+      });
+      expect(querySessions).toHaveBeenCalledWith(
+        expect.any(Array),
+        expect.any(Number),
+        undefined,
+        "gemini-cli",
+        undefined,
+        undefined,
+      );
+    });
+
     it("passes fromMs and toMs to querySessions", async () => {
       const querySessions = vi.fn().mockResolvedValue([]);
       const handlers = createToolHandlers({

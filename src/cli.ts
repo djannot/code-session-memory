@@ -109,6 +109,10 @@ function getIndexerCliCodexPath(): string {
   return path.join(getPackageRoot(), "dist", "src", "indexer-cli-codex.js");
 }
 
+function getIndexerCliGeminiPath(): string {
+  return path.join(getPackageRoot(), "dist", "src", "indexer-cli-gemini.js");
+}
+
 // ---------------------------------------------------------------------------
 // Paths — Cursor
 // ---------------------------------------------------------------------------
@@ -177,6 +181,24 @@ function getCodexConfigPath(): string {
 
 function getCodexSkillDst(): string {
   return path.join(getCodexConfigDir(), "skills", "code-session-memory", "SKILL.md");
+}
+
+// ---------------------------------------------------------------------------
+// Paths — Gemini CLI
+// ---------------------------------------------------------------------------
+
+function getGeminiConfigDir(): string {
+  const envDir = process.env.GEMINI_CONFIG_DIR;
+  if (envDir) return envDir;
+  return path.join(os.homedir(), ".gemini");
+}
+
+function getGeminiSettingsPath(): string {
+  return path.join(getGeminiConfigDir(), "settings.json");
+}
+
+function getGeminiSkillDst(): string {
+  return path.join(getGeminiConfigDir(), "skills", "code-session-memory", "SKILL.md");
 }
 
 // ---------------------------------------------------------------------------
@@ -683,7 +705,7 @@ function installCursorSkill(skillSrc: string): { dstPath: string; existed: boole
   const cursorFrontmatter = [
     "---",
     "name: code-session-memory",
-    "description: Search past AI coding sessions semantically across OpenCode, Claude Code, Cursor, VS Code, and Codex. Use this when the user asks about past work, decisions, or implementations.",
+    "description: Search past AI coding sessions semantically across OpenCode, Claude Code, Cursor, VS Code, Codex, and Gemini CLI. Use this when the user asks about past work, decisions, or implementations.",
     "---",
     "",
   ].join("\n");
@@ -1072,7 +1094,7 @@ function installCodexSkill(skillSrc: string): { dstPath: string; existed: boolea
   const codexFrontmatter = [
     "---",
     "name: code-session-memory",
-    "description: Search past AI coding sessions semantically across OpenCode, Claude Code, Cursor, VS Code, and Codex.",
+    "description: Search past AI coding sessions semantically across OpenCode, Claude Code, Cursor, VS Code, Codex, and Gemini CLI.",
     "---",
     "",
   ].join("\n");
@@ -1084,6 +1106,240 @@ function installCodexSkill(skillSrc: string): { dstPath: string; existed: boolea
 
 function uninstallCodexSkill(): "done" | "not_found" {
   const dstPath = getCodexSkillDst();
+  if (!fs.existsSync(dstPath)) return "not_found";
+  fs.unlinkSync(dstPath);
+  try {
+    const dir = path.dirname(dstPath);
+    if (fs.readdirSync(dir).length === 0) fs.rmdirSync(dir);
+  } catch { /* ignore */ }
+  return "done";
+}
+
+// ---------------------------------------------------------------------------
+// Gemini CLI — settings.json
+// ---------------------------------------------------------------------------
+
+function parseGeminiSettingsOrEmpty(settingsPath: string): Record<string, unknown> {
+  if (!fs.existsSync(settingsPath)) return {};
+  try {
+    return JSON.parse(fs.readFileSync(settingsPath, "utf8")) as Record<string, unknown>;
+  } catch {
+    throw new Error(`Could not parse existing ${settingsPath} — please check it is valid JSON.`);
+  }
+}
+
+function installGeminiMcpConfig(mcpServerPath: string): { settingsPath: string; existed: boolean } {
+  const settingsPath = getGeminiSettingsPath();
+  const existed = fs.existsSync(settingsPath);
+  const settings = parseGeminiSettingsOrEmpty(settingsPath);
+
+  const mcpServersRaw = settings.mcpServers;
+  const mcpServers =
+    mcpServersRaw && typeof mcpServersRaw === "object"
+      ? mcpServersRaw as Record<string, unknown>
+      : {};
+
+  mcpServers["code-session-memory"] = {
+    type: "stdio",
+    command: "node",
+    args: [mcpServerPath],
+  };
+  settings.mcpServers = mcpServers;
+
+  ensureDir(path.dirname(settingsPath));
+  fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + "\n", "utf8");
+  return { settingsPath, existed };
+}
+
+function uninstallGeminiMcpConfig(): "done" | "not_found" {
+  const settingsPath = getGeminiSettingsPath();
+  if (!fs.existsSync(settingsPath)) return "not_found";
+  try {
+    const settings = JSON.parse(fs.readFileSync(settingsPath, "utf8")) as Record<string, unknown>;
+    if (
+      settings.mcpServers &&
+      typeof settings.mcpServers === "object" &&
+      "code-session-memory" in (settings.mcpServers as object)
+    ) {
+      delete (settings.mcpServers as Record<string, unknown>)["code-session-memory"];
+      fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + "\n", "utf8");
+      return "done";
+    }
+    return "not_found";
+  } catch {
+    return "not_found";
+  }
+}
+
+function checkGeminiMcpConfigured(): boolean {
+  const settingsPath = getGeminiSettingsPath();
+  try {
+    const settings = JSON.parse(fs.readFileSync(settingsPath, "utf8")) as Record<string, unknown>;
+    return !!(
+      settings.mcpServers &&
+      typeof settings.mcpServers === "object" &&
+      "code-session-memory" in (settings.mcpServers as object)
+    );
+  } catch {
+    return false;
+  }
+}
+
+function installGeminiHook(indexerCliGeminiPath: string): { settingsPath: string; existed: boolean } {
+  const settingsPath = getGeminiSettingsPath();
+  const existed = fs.existsSync(settingsPath);
+  const settings = parseGeminiSettingsOrEmpty(settingsPath);
+
+  const hooksRaw = settings.hooks;
+  const hooks =
+    hooksRaw && typeof hooksRaw === "object"
+      ? hooksRaw as Record<string, unknown>
+      : {};
+
+  const afterAgentRaw = Array.isArray(hooks.AfterAgent) ? hooks.AfterAgent : [];
+  const cleanedGroups: unknown[] = [];
+
+  for (const entry of afterAgentRaw) {
+    if (!entry || typeof entry !== "object") continue;
+    const group = entry as Record<string, unknown>;
+    if (!Array.isArray(group.hooks)) continue;
+    const filteredHooks = group.hooks.filter((h: unknown) => {
+      if (!h || typeof h !== "object") return true;
+      const hook = h as Record<string, unknown>;
+      return typeof hook.command !== "string" || !hook.command.includes("indexer-cli-gemini");
+    });
+    if (filteredHooks.length > 0) {
+      cleanedGroups.push({ ...group, hooks: filteredHooks });
+    }
+  }
+
+  cleanedGroups.push({
+    hooks: [
+      {
+        type: "command",
+        name: "code-session-memory-indexer",
+        command: `node ${indexerCliGeminiPath}`,
+      },
+    ],
+  });
+
+  hooks.AfterAgent = cleanedGroups;
+  settings.hooks = hooks;
+
+  ensureDir(path.dirname(settingsPath));
+  fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + "\n", "utf8");
+  return { settingsPath, existed };
+}
+
+function uninstallGeminiHook(): "done" | "not_found" {
+  const settingsPath = getGeminiSettingsPath();
+  if (!fs.existsSync(settingsPath)) return "not_found";
+  try {
+    const settings = JSON.parse(fs.readFileSync(settingsPath, "utf8")) as Record<string, unknown>;
+    const hooks = settings.hooks as Record<string, unknown> | undefined;
+    const afterAgent = hooks?.AfterAgent;
+    if (!Array.isArray(afterAgent)) return "not_found";
+
+    let removed = false;
+    const filteredGroups: unknown[] = [];
+
+    for (const entry of afterAgent) {
+      if (!entry || typeof entry !== "object") continue;
+      const group = entry as Record<string, unknown>;
+
+      // Legacy shape support: { command: "..." }
+      if (typeof group.command === "string") {
+        if (group.command.includes("indexer-cli-gemini")) {
+          removed = true;
+          continue;
+        }
+        filteredGroups.push(group);
+        continue;
+      }
+
+      if (!Array.isArray(group.hooks)) {
+        filteredGroups.push(group);
+        continue;
+      }
+
+      const filteredHooks = group.hooks.filter((h: unknown) => {
+        if (!h || typeof h !== "object") return true;
+        const hook = h as Record<string, unknown>;
+        const keep = typeof hook.command !== "string" || !hook.command.includes("indexer-cli-gemini");
+        if (!keep) removed = true;
+        return keep;
+      });
+
+      if (filteredHooks.length > 0) {
+        filteredGroups.push({ ...group, hooks: filteredHooks });
+      }
+    }
+
+    if (!removed) return "not_found";
+    hooks!.AfterAgent = filteredGroups;
+    settings.hooks = hooks!;
+    fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + "\n", "utf8");
+    return "done";
+  } catch {
+    return "not_found";
+  }
+}
+
+function checkGeminiHookInstalled(): boolean {
+  const settingsPath = getGeminiSettingsPath();
+  try {
+    const settings = JSON.parse(fs.readFileSync(settingsPath, "utf8")) as Record<string, unknown>;
+    const hooks = settings.hooks as Record<string, unknown> | undefined;
+    const afterAgent = hooks?.AfterAgent;
+    if (!Array.isArray(afterAgent)) return false;
+    return afterAgent.some((entry: unknown) => {
+      if (!entry || typeof entry !== "object") return false;
+      const group = entry as Record<string, unknown>;
+
+      // Legacy shape support: { command: "..." }
+      if (typeof group.command === "string" && group.command.includes("indexer-cli-gemini")) {
+        return true;
+      }
+
+      if (!Array.isArray(group.hooks)) return false;
+      return group.hooks.some((h: unknown) => {
+        if (!h || typeof h !== "object") return false;
+        const hook = h as Record<string, unknown>;
+        return typeof hook.command === "string" && hook.command.includes("indexer-cli-gemini");
+      });
+    });
+  } catch {
+    return false;
+  }
+}
+
+function installGeminiSkill(skillSrc: string): { dstPath: string; existed: boolean } {
+  const dstPath = getGeminiSkillDst();
+  const existed = fs.existsSync(dstPath);
+
+  if (!fs.existsSync(skillSrc)) {
+    throw new Error(`Skill source not found: ${skillSrc}\nDid you run "npm run build" first?`);
+  }
+
+  const skillBody = fs.readFileSync(skillSrc, "utf8");
+  const bodyWithoutFrontmatter = skillBody
+    .replace(/^---[\s\S]*?---\s*\n?/, "")
+    .trimStart();
+  const geminiFrontmatter = [
+    "---",
+    "name: code-session-memory",
+    "description: Search past AI coding sessions semantically across OpenCode, Claude Code, Cursor, VS Code, Codex, and Gemini CLI.",
+    "---",
+    "",
+  ].join("\n");
+
+  ensureDir(path.dirname(dstPath));
+  fs.writeFileSync(dstPath, geminiFrontmatter + bodyWithoutFrontmatter, "utf8");
+  return { dstPath, existed };
+}
+
+function uninstallGeminiSkill(): "done" | "not_found" {
+  const dstPath = getGeminiSkillDst();
   if (!fs.existsSync(dstPath)) return "not_found";
   fs.unlinkSync(dstPath);
   try {
@@ -1127,6 +1383,10 @@ function isCodexInstalled(): boolean {
   return fs.existsSync(getCodexConfigDir());
 }
 
+function isGeminiInstalled(): boolean {
+  return fs.existsSync(getGeminiConfigDir());
+}
+
 function step(label: string, fn: () => string): void {
   process.stdout.write(`  ${label}... `);
   try {
@@ -1160,11 +1420,13 @@ function install(): void {
   const indexerCursorPath = getIndexerCliCursorPath();
   const indexerVscodePath = getIndexerCliVscodePath();
   const indexerCodexPath = getIndexerCliCodexPath();
+  const indexerGeminiPath = getIndexerCliGeminiPath();
   const openCodeInstalled = isOpenCodeInstalled();
   const claudeInstalled = isClaudeCodeInstalled();
   const cursorInstalled = isCursorInstalled();
   const vscodeInstalled = isVscodeInstalled();
   const codexInstalled = isCodexInstalled();
+  const geminiInstalled = isGeminiInstalled();
 
   // 1. DB
   step("Initialising database", () => {
@@ -1256,6 +1518,22 @@ function install(): void {
     return `${existed ? "updated" : "created"} ${dstPath}`;
   });
 
+  // Gemini CLI
+  stepIf(geminiInstalled, "Configuring Gemini CLI MCP server", () => {
+    const { settingsPath, existed } = installGeminiMcpConfig(mcpPath);
+    return `${existed ? "updated" : "created"} ${settingsPath}`;
+  });
+
+  stepIf(geminiInstalled, "Installing Gemini CLI AfterAgent hook", () => {
+    const { settingsPath, existed } = installGeminiHook(indexerGeminiPath);
+    return `${existed ? "updated" : "created"} ${settingsPath}`;
+  });
+
+  stepIf(geminiInstalled, "Installing Gemini CLI skill", () => {
+    const { dstPath, existed } = installGeminiSkill(getSkillSrc());
+    return `${existed ? "updated" : "created"} ${dstPath}`;
+  });
+
   console.log(`
 ${bold("Installation complete!")}
 
@@ -1264,10 +1542,11 @@ ${bold("Required environment variable:")}
 
 ${bold("Default DB path:")} ${dbPath}
 
-Restart ${bold("OpenCode")}, ${bold("Claude Code")}, ${bold("Cursor")}, ${bold("VS Code")}, and ${bold("Codex")} to activate.
+Restart ${bold("OpenCode")}, ${bold("Claude Code")}, ${bold("Cursor")}, ${bold("VS Code")}, ${bold("Codex")}, and ${bold("Gemini CLI")} to activate.
 
 ${bold("VS Code note:")} Ensure ${bold("Chat: Use Hooks")} is enabled in VS Code settings.
 ${bold("Codex note:")} The notify hook and OPENAI_API_KEY passthrough are set in ${dim(getCodexConfigPath())}.
+${bold("Gemini CLI note:")} The AfterAgent hook is configured in ${dim(getGeminiSettingsPath())}.
 Run ${bold("npx code-session-memory status")} to verify.
 `);
 }
@@ -1282,6 +1561,7 @@ function status(): void {
   const cursorInstalled = isCursorInstalled();
   const vscodeInstalled = isVscodeInstalled();
   const codexInstalled = isCodexInstalled();
+  const geminiInstalled = isGeminiInstalled();
 
   if (openCodeInstalled) {
     console.log(bold("  OpenCode"));
@@ -1327,6 +1607,15 @@ function status(): void {
     console.log(`  ${ok(fs.existsSync(getCodexSkillDst()))}  Skill       ${dim(getCodexSkillDst())}`);
   } else {
     console.log(bold("\n  Codex") + dim("  (not installed — skipped)"));
+  }
+
+  if (geminiInstalled) {
+    console.log(bold("\n  Gemini CLI"));
+    console.log(`  ${ok(checkGeminiMcpConfigured())}  MCP config  ${dim(getGeminiSettingsPath())}`);
+    console.log(`  ${ok(checkGeminiHookInstalled())}  AfterAgent  ${dim(getGeminiSettingsPath())}`);
+    console.log(`  ${ok(fs.existsSync(getGeminiSkillDst()))}  Skill       ${dim(getGeminiSkillDst())}`);
+  } else {
+    console.log(bold("\n  Gemini CLI") + dim("  (not installed — skipped)"));
   }
 
   console.log(bold("\n  Shared"));
@@ -1380,6 +1669,11 @@ function status(): void {
       checkCodexOpenAiPassthroughConfigured() &&
       checkCodexHookInstalled() &&
       fs.existsSync(getCodexSkillDst())
+    )) &&
+    (!geminiInstalled || (
+      checkGeminiMcpConfigured() &&
+      checkGeminiHookInstalled() &&
+      fs.existsSync(getGeminiSkillDst())
     )) &&
     fs.existsSync(mcpPath) &&
     fs.existsSync(dbPath);
@@ -1442,6 +1736,15 @@ function uninstall(): void {
     }],
     ["Codex skill", () => {
       if (uninstallCodexSkill() === "not_found") throw new Error("not found");
+    }],
+    ["Gemini CLI MCP config", () => {
+      if (uninstallGeminiMcpConfig() === "not_found") throw new Error("not found");
+    }],
+    ["Gemini CLI AfterAgent hook", () => {
+      if (uninstallGeminiHook() === "not_found") throw new Error("not found");
+    }],
+    ["Gemini CLI skill", () => {
+      if (uninstallGeminiSkill() === "not_found") throw new Error("not found");
     }],
   ];
 
@@ -1507,7 +1810,7 @@ async function resetDb(): Promise<void> {
 
 function help(): void {
   console.log(`
-${bold("code-session-memory")} — Shared vector memory for OpenCode, Claude Code, Cursor, VS Code, and Codex sessions
+${bold("code-session-memory")} — Shared vector memory for OpenCode, Claude Code, Cursor, VS Code, Codex, and Gemini CLI sessions
 
 ${bold("Usage:")}
   npx code-session-memory install                         Install components for detected tools
@@ -1515,7 +1818,7 @@ ${bold("Usage:")}
   npx code-session-memory uninstall                       Remove all installed components (keeps DB)
   npx code-session-memory reset-db                        Delete all indexed data (keeps installation)
   npx code-session-memory query <text>                    Semantic search across all indexed sessions
-  npx code-session-memory query <text> --source <s>       Filter by source (opencode, claude-code, cursor, vscode, codex)
+  npx code-session-memory query <text> --source <s>       Filter by source (opencode, claude-code, cursor, vscode, codex, gemini-cli)
   npx code-session-memory query <text> --limit <n>        Max results (default: 5)
   npx code-session-memory query <text> --from <date>      Results from date (e.g. 2026-02-01)
   npx code-session-memory query <text> --to <date>        Results up to date (e.g. 2026-02-20)
@@ -1534,6 +1837,7 @@ ${bold("Environment variables:")}
   CURSOR_CONFIG_DIR         Override the Cursor config directory (~/.cursor)
   VSCODE_CONFIG_DIR         Override the VS Code config directory
   CODEX_HOME                Override the Codex home directory (~/.codex)
+  GEMINI_CONFIG_DIR         Override the Gemini CLI config directory (~/.gemini)
 `);
 }
 

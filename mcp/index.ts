@@ -90,7 +90,7 @@ const server = new McpServer({
 const querySessionsSchema = {
   queryText: z.string().min(1).describe("Natural language description of what you are looking for."),
   project: z.string().optional().describe("Filter results to a specific project directory path (e.g. '/Users/me/myproject'). Optional."),
-  source: z.enum(["opencode", "claude-code", "cursor", "vscode", "codex"]).optional().describe("Filter results by tool source: 'opencode', 'claude-code', 'cursor', 'vscode', or 'codex'. Optional — omit to search across all."),
+  source: z.enum(["opencode", "claude-code", "cursor", "vscode", "codex", "gemini-cli"]).optional().describe("Filter results by tool source: 'opencode', 'claude-code', 'cursor', 'vscode', 'codex', or 'gemini-cli'. Optional — omit to search across all."),
   limit: z.number().int().min(1).optional().describe("Maximum number of results to return. Defaults to 5."),
   fromDate: z.string().optional().describe("Return only chunks indexed on or after this date. ISO 8601 format, e.g. '2026-02-01' or '2026-02-20T15:00:00Z'. Optional."),
   toDate: z.string().optional().describe("Return only chunks indexed on or before this date. ISO 8601 format, e.g. '2026-02-20'. A date-only value is treated as end-of-day UTC. Optional."),
@@ -108,7 +108,7 @@ const serverAny = server as any;
 
 serverAny.tool(
   "query_sessions",
-  "Semantically search across all indexed sessions stored in the vector database. Returns the most relevant chunks from past sessions. Sessions from OpenCode, Claude Code, Cursor, VS Code, and Codex are indexed into the same shared database.",
+  "Semantically search across all indexed sessions stored in the vector database. Returns the most relevant chunks from past sessions. Sessions from OpenCode, Claude Code, Cursor, VS Code, Codex, and Gemini CLI are indexed into the same shared database.",
   querySessionsSchema,
   async (args: { queryText: string; project?: string; source?: string; limit?: number; fromDate?: string; toDate?: string }) => {
     // Parse ISO 8601 date strings into unix milliseconds.

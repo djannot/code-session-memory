@@ -1,19 +1,19 @@
 # code-session-memory
 
-Automatic vector memory for [OpenCode](https://opencode.ai), [Claude Code](https://claude.ai/code), [Cursor](https://www.cursor.com), [VS Code](https://code.visualstudio.com), and Codex sessions — shared across all tools.
+Automatic vector memory for [OpenCode](https://opencode.ai), [Claude Code](https://claude.ai/code), [Cursor](https://www.cursor.com), [VS Code](https://code.visualstudio.com), Codex, and Gemini CLI sessions — shared across all tools.
 
-Every time the AI agent finishes its turn, `code-session-memory` automatically indexes the new messages into a local [sqlite-vec](https://github.com/asg017/sqlite-vec) vector database. Past sessions become semantically searchable — both by the AI agent (via the MCP server) and by you. Sessions from OpenCode, Claude Code, Cursor, VS Code, and Codex are stored in the **same database**, so memory is shared across tools.
+Every time the AI agent finishes its turn, `code-session-memory` automatically indexes the new messages into a local [sqlite-vec](https://github.com/asg017/sqlite-vec) vector database. Past sessions become semantically searchable — both by the AI agent (via the MCP server) and by you. Sessions from OpenCode, Claude Code, Cursor, VS Code, Codex, and Gemini CLI are stored in the **same database**, so memory is shared across tools.
 
 ## How it works
 
 ```
-OpenCode (session.idle)   Claude Code (Stop hook)   Cursor (stop hook)   VS Code (Stop hook)   Codex (notify hook)
-        │                          │                       │                     │                      │
-        │ REST API messages        │ JSONL transcript      │ JSONL transcript    │ JSONL transcript     │ JSONL session
-        ▼                          ▼                       ▼                     ▼                      ▼
-session-to-md           transcript-to-messages   cursor-transcript-to-messages  vscode-transcript-to-messages  codex-session-to-messages
-        │                          │                       │                     │                      │
-        └──────────────────────────┴───────────────────────┴─────────────────────┴──────────────────────┘
+OpenCode (session.idle)   Claude Code (Stop hook)   Cursor (stop hook)   VS Code (Stop hook)   Codex (notify hook)   Gemini CLI (AfterAgent)
+        │                          │                       │                     │                      │                      │
+        │ REST API messages        │ JSONL transcript      │ JSONL transcript    │ JSONL transcript     │ JSONL session        │ JSON session
+        ▼                          ▼                       ▼                     ▼                      ▼                      ▼
+session-to-md           transcript-to-messages   cursor-transcript-to-messages  vscode-transcript-to-messages  codex-session-to-messages  gemini-session-to-messages
+        │                          │                       │                     │                      │                      │
+        └──────────────────────────┴───────────────────────┴─────────────────────┴──────────────────────┴──────────────────────┘
                                     ▼
                          chunker  →  heading-aware chunks (≤1000 tokens, 10% overlap)
                                     │
@@ -35,7 +35,7 @@ Only **new messages** are indexed on each turn — previously indexed messages a
 
 - Node.js ≥ 18
 - An OpenAI API key (for `text-embedding-3-large`)
-- At least one supported tool installed (OpenCode, Claude Code, Cursor, VS Code, or Codex)
+- At least one supported tool installed (OpenCode, Claude Code, Cursor, VS Code, Codex, or Gemini CLI)
 
 ### Install
 
@@ -71,15 +71,22 @@ The `install` command sets up everything for all detected tools on your machine:
 3. Writes the `notify` hook in `~/.codex/config.toml` (fires after each agent turn)
 4. Copies the skill to `~/.codex/skills/code-session-memory/SKILL.md`
 
+**Gemini CLI:**
+1. Writes the MCP server entry into `~/.gemini/settings.json` under `mcpServers.code-session-memory`
+2. Writes the `AfterAgent` hook in `~/.gemini/settings.json` (fires after each agent turn)
+3. Copies the skill to `~/.gemini/skills/code-session-memory/SKILL.md`
+
 **All tools share:**
 - The same database at `~/.local/share/code-session-memory/sessions.db`
 - The same MCP server for querying past sessions
 
-Then **restart OpenCode / Claude Code / Cursor / VS Code / Codex** to activate.
+Then **restart OpenCode / Claude Code / Cursor / VS Code / Codex / Gemini CLI** to activate.
 
 > **VS Code note:** Ensure **Chat: Use Hooks** is enabled in VS Code settings (it is by default in VS Code 1.109.3+).
 >
 > **Codex note:** The install command sets `notify = ["node", ".../indexer-cli-codex.js"]` and MCP env passthrough `["OPENAI_API_KEY"]` in `~/.codex/config.toml`.
+>
+> **Gemini CLI note:** The install command sets an `AfterAgent` hook invoking `indexer-cli-gemini.js` in `~/.gemini/settings.json`.
 
 ### Set your API key
 
@@ -91,7 +98,7 @@ Add this to your shell profile (`.bashrc`, `.zshrc`, etc.) so it's always availa
 
 ## Usage
 
-Once installed, memory indexing is **fully automatic**. No further action needed — sessions are indexed as you use OpenCode, Claude Code, Cursor, VS Code, or Codex.
+Once installed, memory indexing is **fully automatic**. No further action needed — sessions are indexed as you use OpenCode, Claude Code, Cursor, VS Code, Codex, or Gemini CLI.
 
 ### Verify installation
 
@@ -127,6 +134,11 @@ code-session-memory status
     MCP config     ~/.codex/config.toml                                ✓
     Notify hook    ~/.codex/config.toml                                ✓
     Skill          ~/.codex/skills/code-session-memory/SKILL.md        ✓
+
+  Gemini CLI
+    MCP config     ~/.gemini/settings.json                              ✓
+    AfterAgent     ~/.gemini/settings.json                              ✓
+    Skill          ~/.gemini/skills/code-session-memory/SKILL.md        ✓
 ```
 
 ### MCP tools
@@ -141,7 +153,7 @@ Semantic search across all indexed sessions.
 |---|---|---|---|
 | `queryText` | string | yes | Natural language query |
 | `project` | string | no | Filter by project directory path |
-| `source` | string | no | Filter by tool: `"opencode"`, `"claude-code"`, `"cursor"`, `"vscode"`, or `"codex"` |
+| `source` | string | no | Filter by tool: `"opencode"`, `"claude-code"`, `"cursor"`, `"vscode"`, `"codex"`, or `"gemini-cli"` |
 | `limit` | number | no | Max results (default: 5) |
 | `fromDate` | string | no | Return chunks indexed on or after this date (ISO 8601, e.g. `"2026-02-01"`) |
 | `toDate` | string | no | Return chunks indexed on or before this date (ISO 8601, e.g. `"2026-02-20"`) |
@@ -177,13 +189,14 @@ You can search your indexed sessions directly from the terminal without going th
 npx code-session-memory query "authentication middleware"
 npx code-session-memory query "auth flow" --source opencode
 npx code-session-memory query "session summary" --source codex
+npx code-session-memory query "hook payload format" --source gemini-cli
 npx code-session-memory query "migration" --limit 10
 npx code-session-memory query "error handling" --from 2026-02-01 --to 2026-02-20
 ```
 
 | Flag | Default | Description |
 |---|---|---|
-| `--source <s>` | none | Filter by tool: `opencode`, `claude-code`, `cursor`, `vscode`, or `codex` |
+| `--source <s>` | none | Filter by tool: `opencode`, `claude-code`, `cursor`, `vscode`, `codex`, or `gemini-cli` |
 | `--limit <n>` | 5 | Max number of results |
 | `--from <date>` | none | Only include sessions from this date (ISO 8601, e.g. `2026-02-01`) |
 | `--to <date>` | none | Only include sessions up to this date (inclusive) |
@@ -286,6 +299,7 @@ Show me how we solved the TypeScript config issue.
 | `CURSOR_CONFIG_DIR` | `~/.cursor` | Override the Cursor config directory. |
 | `VSCODE_CONFIG_DIR` | `~/.config/Code/User` (Linux) / `~/Library/Application Support/Code/User` (macOS) | Override the VS Code config directory. |
 | `CODEX_HOME` | `~/.codex` | Override the Codex home directory. |
+| `GEMINI_CONFIG_DIR` | `~/.gemini` | Override the Gemini CLI config directory. |
 | `OPENAI_MODEL` | `text-embedding-3-large` | Override the embedding model. |
 | `OPENAI_SUMMARY_MODEL` | `gpt-5-nano` | Override the model used for session compaction (Compact for restart). |
 | `CSM_SUMMARY_MAX_OUTPUT_TOKENS` | `5000` | Override the max output token budget for session compaction. |
@@ -315,6 +329,7 @@ code-session-memory/
 │   ├── cursor-transcript-to-messages.ts  # Cursor JSONL transcript parser → FullMessage[]
 │   ├── vscode-transcript-to-messages.ts  # VS Code JSONL transcript parser → FullMessage[]
 │   ├── codex-session-to-messages.ts       # Codex JSONL session parser → FullMessage[]
+│   ├── gemini-session-to-messages.ts      # Gemini CLI JSON session parser → FullMessage[]
 │   ├── opencode-db-to-messages.ts        # OpenCode internal DB reader (fallback for -s mode)
 │   ├── indexer.ts                        # Orchestrator: incremental indexing
 │   ├── indexer-cli.ts                    # Node.js subprocess (called by OpenCode plugin)
@@ -322,6 +337,7 @@ code-session-memory/
 │   ├── indexer-cli-cursor.ts             # Node.js subprocess (called by Cursor stop hook)
 │   ├── indexer-cli-vscode.ts            # Node.js subprocess (called by VS Code Stop hook)
 │   ├── indexer-cli-codex.ts              # Node.js subprocess (called by Codex notify hook)
+│   ├── indexer-cli-gemini.ts             # Node.js subprocess (called by Gemini CLI AfterAgent hook)
 │   ├── cli.ts                            # install / status / uninstall / reset-db / query commands
 │   ├── cli-query.ts                      # query command: semantic search from the terminal
 │   └── cli-sessions.ts                   # sessions list / print / delete / purge (TUI)
@@ -345,6 +361,7 @@ code-session-memory/
     ├── cursor-transcript-to-messages.test.ts # Unit tests: Cursor JSONL parser
     ├── vscode-transcript-to-messages.test.ts # Unit tests: VS Code JSONL parser
     ├── codex-session-to-messages.test.ts    # Unit tests: Codex JSONL parser
+    ├── gemini-session-to-messages.test.ts   # Unit tests + e2e indexing: Gemini CLI parser
     ├── opencode-db-to-messages.test.ts      # Unit tests: OpenCode internal DB reader
     ├── cli-query.test.ts                    # Unit tests: query CLI command
     ├── e2e-claude.test.ts                   # End-to-end: Claude Code pipeline
@@ -391,12 +408,13 @@ Tests use [Vitest](https://vitest.dev) and run without any external dependencies
  ✓ tests/indexer.test.ts                           (9 tests)
  ✓ tests/cursor-to-messages.test.ts               (15 tests)
  ✓ tests/cursor-transcript-to-messages.test.ts     (7 tests)
+ ✓ tests/gemini-session-to-messages.test.ts         (5 tests)
  ✓ tests/opencode-db-to-messages.test.ts           (8 tests)
  ✓ tests/cli-query.test.ts                        (23 tests)
  ✓ tests/e2e-claude.test.ts                       (18 tests)
  ✓ tests/e2e-cursor.test.ts                        (8 tests)
  ✓ tests/e2e-opencode.test.ts                     (14 tests)
-   Tests  188 passed
+   Tests  249 passed
 ```
 
 To refresh the e2e fixtures (e.g. after changing the indexer or parsers), run:
@@ -411,7 +429,7 @@ This invokes the real `claude` and `opencode` CLIs to generate two-turn sessions
 npx code-session-memory uninstall
 ```
 
-This removes the plugin, hooks, skill files, and MCP config entries for all tools (OpenCode, Claude Code, Cursor, VS Code, and Codex). The database is **not** removed automatically.
+This removes the plugin, hooks, skill files, and MCP config entries for all tools (OpenCode, Claude Code, Cursor, VS Code, Codex, and Gemini CLI). The database is **not** removed automatically.
 
 To delete individual sessions instead of wiping everything, use the [session browser](#browsing-sessions):
 ```bash
@@ -480,6 +498,10 @@ VS Code (with GitHub Copilot agent mode) supports the same hook lifecycle events
 
 Codex stores session transcripts as JSONL under `~/.codex/sessions/YYYY/MM/DD/rollout-<timestamp>-<thread-id>.jsonl`. Its notify hook passes payload as a JSON string in `process.argv[2]` (not stdin). The parser (`codex-session-to-messages.ts`) indexes only clean `event_msg.user_message` user inputs and assistant `final_answer` messages, skipping system/developer injections and commentary messages.
 
+### Gemini CLI session parsing
+
+Gemini CLI provides `transcript_path` and `session_id` in the `AfterAgent` hook payload. The parser (`gemini-session-to-messages.ts`) reads the JSON session file, keeps `user` and `gemini` messages, maps `toolCalls[]` to `tool-invocation` parts, and derives a title from the first user prompt.
+
 ### Chunking strategy
 
 - Heading-aware splitting — headings define semantic boundaries
@@ -490,7 +512,7 @@ Codex stores session transcripts as JSONL under `~/.codex/sessions/YYYY/MM/DD/ro
 
 ### MCP server
 
-The MCP server uses **stdio transport** — the simplest and most reliable transport for local use. It opens and closes the SQLite connection on each query (no persistent connection), making it safe to run alongside the indexer. The `query_sessions` tool supports filtering by `source` (`opencode`, `claude-code`, `cursor`, `vscode`, `codex`), `project`, and date range (`fromDate`/`toDate`).
+The MCP server uses **stdio transport** — the simplest and most reliable transport for local use. It opens and closes the SQLite connection on each query (no persistent connection), making it safe to run alongside the indexer. The `query_sessions` tool supports filtering by `source` (`opencode`, `claude-code`, `cursor`, `vscode`, `codex`, `gemini-cli`), `project`, and date range (`fromDate`/`toDate`).
 
 ## License
 

@@ -110,8 +110,19 @@ describe("parseQueryArgs", () => {
     expect(opts.source).toBe("codex");
   });
 
+  it("parses --source gemini-cli", () => {
+    const opts = parseQueryArgs(["auth", "--source", "gemini-cli"]);
+    expect(opts.source).toBe("gemini-cli");
+  });
+
   it("throws on invalid --source value", () => {
     expect(() => parseQueryArgs(["auth", "--source", "invalid"])).toThrow('Invalid --source "invalid"');
+    try {
+      parseQueryArgs(["auth", "--source", "invalid"]);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      expect(msg).toContain("gemini-cli");
+    }
   });
 
   it("throws on invalid --limit value", () => {

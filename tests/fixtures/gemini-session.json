@@ -1,0 +1,46 @@
+{
+  "session_id": "gemini-session-001",
+  "messages": [
+    {
+      "id": "msg-user-1",
+      "type": "user",
+      "timestamp": "2026-02-22T10:00:00.000Z",
+      "content": [
+        { "type": "text", "text": "Help me wire MCP server for tests." }
+      ]
+    },
+    {
+      "id": "msg-gemini-1",
+      "type": "gemini",
+      "timestamp": "2026-02-22T10:00:05.000Z",
+      "content": "I will inspect project configuration and hooks.",
+      "toolCalls": [
+        {
+          "id": "tool-001",
+          "name": "read_file",
+          "args": { "path": "package.json" },
+          "status": "success",
+          "result": { "firstLine": "{" }
+        },
+        {
+          "id": "tool-002",
+          "name": "list_dir",
+          "arguments": { "path": "src" },
+          "status": "running"
+        }
+      ]
+    },
+    {
+      "id": "msg-system-1",
+      "type": "system",
+      "content": "Internal system message should be skipped"
+    },
+    {
+      "id": "msg-gemini-2",
+      "type": "gemini",
+      "content": [
+        { "type": "text", "text": "Done. I found the files." }
+      ]
+    }
+  ]
+}
