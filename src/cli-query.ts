@@ -55,9 +55,9 @@ export function parseQueryArgs(args: string[]): QueryOptions {
 
     if (arg === "--source") {
       const val = args[++i];
-      if (!val) throw new Error("--source requires a value (opencode, claude-code, cursor)");
-      if (val !== "opencode" && val !== "claude-code" && val !== "cursor") {
-        throw new Error(`Invalid --source "${val}". Must be one of: opencode, claude-code, cursor`);
+      if (!val) throw new Error("--source requires a value (opencode, claude-code, cursor, vscode)");
+      if (val !== "opencode" && val !== "claude-code" && val !== "cursor" && val !== "vscode") {
+        throw new Error(`Invalid --source "${val}". Must be one of: opencode, claude-code, cursor, vscode`);
       }
       source = val;
     } else if (arg === "--limit") {

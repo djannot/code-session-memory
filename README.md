@@ -1,19 +1,19 @@
 # code-session-memory
 
-Automatic vector memory for [OpenCode](https://opencode.ai), [Claude Code](https://claude.ai/code), and [Cursor](https://www.cursor.com) sessions — shared across all three tools.
+Automatic vector memory for [OpenCode](https://opencode.ai), [Claude Code](https://claude.ai/code), [Cursor](https://www.cursor.com), and [VS Code](https://code.visualstudio.com) sessions — shared across all four tools.
 
-Every time the AI agent finishes its turn, `code-session-memory` automatically indexes the new messages into a local [sqlite-vec](https://github.com/asg017/sqlite-vec) vector database. Past sessions become semantically searchable — both by the AI agent (via the MCP server) and by you. Sessions from OpenCode, Claude Code, and Cursor are stored in the **same database**, so memory is shared across tools.
+Every time the AI agent finishes its turn, `code-session-memory` automatically indexes the new messages into a local [sqlite-vec](https://github.com/asg017/sqlite-vec) vector database. Past sessions become semantically searchable — both by the AI agent (via the MCP server) and by you. Sessions from OpenCode, Claude Code, Cursor, and VS Code are stored in the **same database**, so memory is shared across tools.
 
 ## How it works
 
 ```
-OpenCode (session.idle)    Claude Code (Stop hook)    Cursor (stop hook)
-        │                           │                        │
-        │  REST API messages        │  JSONL transcript      │  JSONL transcript
-        ▼                           ▼                        ▼
-session-to-md          transcript-to-messages   cursor-transcript-to-messages
-        │                           │                        │
-        └───────────────────────────┬────────────────────────┘
+OpenCode (session.idle)    Claude Code (Stop hook)    Cursor (stop hook)    VS Code (Stop hook)
+        │                           │                        │                      │
+        │  REST API messages        │  JSONL transcript      │  JSONL transcript    │  JSONL transcript
+        ▼                           ▼                        ▼                      ▼
+session-to-md          transcript-to-messages   cursor-transcript-to-messages  vscode-transcript-to-messages
+        │                           │                        │                      │
+        └───────────────────────────┴────────────────────────┴──────────────────────┘
                                     ▼
                          chunker  →  heading-aware chunks (≤1000 tokens, 10% overlap)
                                     │
@@ -43,7 +43,7 @@ Only **new messages** are indexed on each turn — previously indexed messages a
 npx code-session-memory install
 ```
 
-The `install` command sets up everything for all three tools in one shot:
+The `install` command sets up everything for all four tools in one shot:
 
 **OpenCode:**
 1. Copies the plugin to `~/.config/opencode/plugins/code-session-memory.ts`
@@ -60,11 +60,18 @@ The `install` command sets up everything for all three tools in one shot:
 2. Writes the MCP server entry into `~/.cursor/mcp.json`
 3. Copies the skill to `~/.cursor/skills/code-session-memory/SKILL.md`
 
+**VS Code:**
+1. Writes a `Stop` hook to `~/.vscode/hooks/code-session-memory.json` (Copilot hook format)
+2. Registers the hook file in VS Code's `settings.json` via `chat.hookFilesLocations`
+3. Writes the MCP server entry into `~/.config/Code/User/mcp.json` (Linux) or `~/Library/Application Support/Code/User/mcp.json` (macOS)
+
 **All tools share:**
 - The same database at `~/.local/share/code-session-memory/sessions.db`
 - The same MCP server for querying past sessions
 
-Then **restart OpenCode / Claude Code / Cursor** to activate.
+Then **restart OpenCode / Claude Code / Cursor / VS Code** to activate.
+
+> **VS Code note:** Ensure **Chat: Use Hooks** is enabled in VS Code settings (it is by default in VS Code 1.109.3+).
 
 ### Set your API key
 
@@ -76,7 +83,7 @@ Add this to your shell profile (`.bashrc`, `.zshrc`, etc.) so it's always availa
 
 ## Usage
 
-Once installed, memory indexing is **fully automatic**. No further action needed — sessions are indexed as you use OpenCode or Claude Code.
+Once installed, memory indexing is **fully automatic**. No further action needed — sessions are indexed as you use OpenCode, Claude Code, Cursor, or VS Code.
 
 ### Verify installation
 
@@ -102,6 +109,11 @@ code-session-memory status
     Stop hook      ~/.claude.json                                      ✓
     Skill          ~/.claude/CLAUDE.md                                 ✓
     MCP server     /path/to/dist/mcp/index.js                          ✓
+
+  VS Code
+    MCP config     ~/.config/Code/User/mcp.json                        ✓
+    Stop hook      ~/.vscode/hooks/code-session-memory.json            ✓
+    Hook loc       ~/.config/Code/User/settings.json                   ✓
 ```
 
 ### MCP tools
@@ -116,7 +128,7 @@ Semantic search across all indexed sessions.
 |---|---|---|---|
 | `queryText` | string | yes | Natural language query |
 | `project` | string | no | Filter by project directory path |
-| `source` | string | no | Filter by tool: `"opencode"`, `"claude-code"`, or `"cursor"` |
+| `source` | string | no | Filter by tool: `"opencode"`, `"claude-code"`, `"cursor"`, or `"vscode"` |
 | `limit` | number | no | Max results (default: 5) |
 | `fromDate` | string | no | Return chunks indexed on or after this date (ISO 8601, e.g. `"2026-02-01"`) |
 | `toDate` | string | no | Return chunks indexed on or before this date (ISO 8601, e.g. `"2026-02-20"`) |
@@ -157,7 +169,7 @@ npx code-session-memory query "error handling" --from 2026-02-01 --to 2026-02-20
 
 | Flag | Default | Description |
 |---|---|---|
-| `--source <s>` | none | Filter by tool: `opencode`, `claude-code`, or `cursor` |
+| `--source <s>` | none | Filter by tool: `opencode`, `claude-code`, `cursor`, or `vscode` |
 | `--limit <n>` | 5 | Max number of results |
 | `--from <date>` | none | Only include sessions from this date (ISO 8601, e.g. `2026-02-01`) |
 | `--to <date>` | none | Only include sessions up to this date (inclusive) |
@@ -244,6 +256,7 @@ Show me how we solved the TypeScript config issue.
 | `OPENCODE_CONFIG_DIR` | `~/.config/opencode` | Override the OpenCode config directory. |
 | `CLAUDE_CONFIG_DIR` | `~/.claude` | Override the Claude Code config directory. |
 | `CURSOR_CONFIG_DIR` | `~/.cursor` | Override the Cursor config directory. |
+| `VSCODE_CONFIG_DIR` | `~/.config/Code/User` (Linux) / `~/Library/Application Support/Code/User` (macOS) | Override the VS Code config directory. |
 | `OPENAI_MODEL` | `text-embedding-3-large` | Override the embedding model. |
 
 ### Database path
@@ -269,11 +282,13 @@ code-session-memory/
 │   ├── transcript-to-messages.ts          # Claude Code JSONL transcript parser
 │   ├── cursor-to-messages.ts             # Cursor state.vscdb reader (metadata + title)
 │   ├── cursor-transcript-to-messages.ts  # Cursor JSONL transcript parser → FullMessage[]
+│   ├── vscode-transcript-to-messages.ts  # VS Code JSONL transcript parser → FullMessage[]
 │   ├── opencode-db-to-messages.ts        # OpenCode internal DB reader (fallback for -s mode)
 │   ├── indexer.ts                        # Orchestrator: incremental indexing
 │   ├── indexer-cli.ts                    # Node.js subprocess (called by OpenCode plugin)
 │   ├── indexer-cli-claude.ts             # Node.js subprocess (called by Claude Code hook)
 │   ├── indexer-cli-cursor.ts             # Node.js subprocess (called by Cursor stop hook)
+│   ├── indexer-cli-vscode.ts            # Node.js subprocess (called by VS Code Stop hook)
 │   ├── cli.ts                            # install / status / uninstall / reset-db / query commands
 │   ├── cli-query.ts                      # query command: semantic search from the terminal
 │   └── cli-sessions.ts                   # sessions list / print / delete / purge (TUI)
@@ -295,6 +310,7 @@ code-session-memory/
     ├── session-to-md.test.ts
     ├── cursor-to-messages.test.ts           # Unit tests: Cursor SQLite reader
     ├── cursor-transcript-to-messages.test.ts # Unit tests: Cursor JSONL parser
+    ├── vscode-transcript-to-messages.test.ts # Unit tests: VS Code JSONL parser
     ├── opencode-db-to-messages.test.ts      # Unit tests: OpenCode internal DB reader
     ├── cli-query.test.ts                    # Unit tests: query CLI command
     ├── e2e-claude.test.ts                   # End-to-end: Claude Code pipeline
@@ -361,7 +377,7 @@ This invokes the real `claude` and `opencode` CLIs to generate two-turn sessions
 npx code-session-memory uninstall
 ```
 
-This removes the plugin, hooks, skill files, and MCP config entries for all tools (OpenCode, Claude Code, and Cursor). The database is **not** removed automatically.
+This removes the plugin, hooks, skill files, and MCP config entries for all tools (OpenCode, Claude Code, Cursor, and VS Code). The database is **not** removed automatically.
 
 To delete individual sessions instead of wiping everything, use the [session browser](#browsing-sessions):
 ```bash
@@ -422,6 +438,10 @@ Cursor provides a `transcript_path` field in the stop hook payload — a JSONL f
 
 Session metadata (title only) is read best-effort from the SQLite `state.vscdb`. The Cursor `stop` hook fires after each agent turn and requires **Cursor v2.5+**.
 
+### VS Code transcript parsing
+
+VS Code (with GitHub Copilot agent mode) supports the same hook lifecycle events as Claude Code and provides a `transcript_path` in its Stop hook payload. The parser (`vscode-transcript-to-messages.ts`) handles the JSONL transcript similarly to Claude Code's parser, with retry logic for potential race conditions between hook firing and transcript flush. The Stop hook requires **VS Code 1.109.3+** with **Chat: Use Hooks** enabled.
+
 ### Chunking strategy
 
 - Heading-aware splitting — headings define semantic boundaries
@@ -432,7 +452,7 @@ Session metadata (title only) is read best-effort from the SQLite `state.vscdb`.
 
 ### MCP server
 
-The MCP server uses **stdio transport** — the simplest and most reliable transport for local use. It opens and closes the SQLite connection on each query (no persistent connection), making it safe to run alongside the indexer. The `query_sessions` tool supports filtering by `source`, `project`, and date range (`fromDate`/`toDate`).
+The MCP server uses **stdio transport** — the simplest and most reliable transport for local use. It opens and closes the SQLite connection on each query (no persistent connection), making it safe to run alongside the indexer. The `query_sessions` tool supports filtering by `source` (`opencode`, `claude-code`, `cursor`, `vscode`), `project`, and date range (`fromDate`/`toDate`).
 
 ## License
 
