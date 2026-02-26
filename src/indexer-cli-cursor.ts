@@ -24,6 +24,7 @@
 
 import { resolveDbPath, openDatabase, getSessionMeta } from "./database";
 import { indexNewMessages } from "./indexer";
+import { runPostHookCommand } from "./post-hook";
 import {
   resolveCursorDbPath,
   openCursorDb,
@@ -89,10 +90,14 @@ async function main() {
   const dbPath = resolveDbPath();
   const db = openDatabase({ dbPath });
 
+  let result = { indexed: 0, skipped: 0 };
+  let indexError: string | undefined;
+  let title = "";
+
   try {
     // Derive session title from SQLite (best-effort — don't fail if unavailable)
     const existingMeta = getSessionMeta(db, composerId);
-    let title = existingMeta?.session_title ?? "";
+    title = existingMeta?.session_title ?? "";
 
     if (!title) {
       try {
@@ -127,13 +132,23 @@ async function main() {
       directory: projectDir,
     };
 
-    await indexNewMessages(db, session, messages, "cursor");
+    result = await indexNewMessages(db, session, messages, "cursor");
   } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : String(err);
-    process.stderr.write(`[code-session-memory] Indexing error: ${msg}\n`);
+    indexError = err instanceof Error ? err.message : String(err);
+    process.stderr.write(`[code-session-memory] Indexing error: ${indexError}\n`);
   } finally {
     db.close();
   }
+
+  runPostHookCommand({
+    source: "cursor",
+    sessionId: composerId,
+    sessionTitle: title,
+    project: projectDir,
+    indexedCount: result.indexed,
+    success: !indexError,
+    errorMessage: indexError,
+  });
 }
 
 main().catch((err) => {

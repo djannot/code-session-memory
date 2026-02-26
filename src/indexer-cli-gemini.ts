@@ -11,6 +11,7 @@
 
 import { resolveDbPath, openDatabase, getSessionMeta } from "./database";
 import { indexNewMessages } from "./indexer";
+import { runPostHookCommand } from "./post-hook";
 import {
   geminiSessionToMessages,
   deriveGeminiSessionTitle,
@@ -164,12 +165,16 @@ async function main() {
   const dbPath = resolveDbPath();
   const db = openDatabase({ dbPath });
 
+  let result = { indexed: 0, skipped: 0 };
+  let indexError: string | undefined;
+  let title = "";
+
   try {
     const messages = geminiSessionToMessages(transcriptPath);
     if (messages.length === 0) return;
 
     const existingMeta = getSessionMeta(db, sessionId);
-    const title = existingMeta?.session_title || deriveGeminiSessionTitle(messages, sessionId);
+    title = existingMeta?.session_title || deriveGeminiSessionTitle(messages, sessionId);
 
     const session = {
       id: sessionId,
@@ -177,13 +182,23 @@ async function main() {
       directory: projectDir,
     };
 
-    await indexNewMessages(db, session, messages, "gemini-cli");
+    result = await indexNewMessages(db, session, messages, "gemini-cli");
   } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : String(err);
-    process.stderr.write(`[code-session-memory] Indexing error: ${msg}\n`);
+    indexError = err instanceof Error ? err.message : String(err);
+    process.stderr.write(`[code-session-memory] Indexing error: ${indexError}\n`);
   } finally {
     db.close();
   }
+
+  runPostHookCommand({
+    source: "gemini-cli",
+    sessionId,
+    sessionTitle: title,
+    project: projectDir,
+    indexedCount: result.indexed,
+    success: !indexError,
+    errorMessage: indexError,
+  });
 }
 
 main().catch((err) => {

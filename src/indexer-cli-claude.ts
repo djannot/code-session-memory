@@ -14,6 +14,7 @@
 import { resolveDbPath, openDatabase, getSessionMeta } from "./database";
 import { indexNewMessages } from "./indexer";
 import { parseTranscript, deriveSessionTitle } from "./transcript-to-messages";
+import { runPostHookCommand } from "./post-hook";
 import type { FullMessage } from "./types";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -58,6 +59,10 @@ async function main() {
   const dbPath = resolveDbPath();
   const db = openDatabase({ dbPath });
 
+  let result = { indexed: 0, skipped: 0 };
+  let indexError: string | undefined;
+  let title = "";
+
   try {
     // Parse the transcript — retry if the JSONL ends on a tool result,
     // which means Claude Code hasn't finished writing the final assistant
@@ -75,7 +80,7 @@ async function main() {
 
     // Build a session title from the first user message
     const existingMeta = getSessionMeta(db, sessionId);
-    const title = existingMeta?.session_title || deriveSessionTitle(messages);
+    title = existingMeta?.session_title || deriveSessionTitle(messages);
 
     const session = {
       id: sessionId,
@@ -83,13 +88,23 @@ async function main() {
       directory: cwd ?? "",
     };
 
-    await indexNewMessages(db, session, messages, "claude-code");
+    result = await indexNewMessages(db, session, messages, "claude-code");
   } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : String(err);
-    process.stderr.write(`[code-session-memory] Indexing error: ${msg}\n`);
+    indexError = err instanceof Error ? err.message : String(err);
+    process.stderr.write(`[code-session-memory] Indexing error: ${indexError}\n`);
   } finally {
     db.close();
   }
+
+  runPostHookCommand({
+    source: "claude-code",
+    sessionId,
+    sessionTitle: title,
+    project: cwd,
+    indexedCount: result.indexed,
+    success: !indexError,
+    errorMessage: indexError,
+  });
 }
 
 main().catch((err) => {

@@ -8,6 +8,7 @@
  *   npx code-session-memory uninstall      — remove all installed components
  *   npx code-session-memory reset-db       — wipe the database (with confirmation)
  *   npx code-session-memory sessions       — browse / print / delete sessions
+ *   npx code-session-memory config         — manage configuration (post-hook-command, etc.)
  */
 
 import fs from "fs";
@@ -18,6 +19,7 @@ import { parse as parseToml, stringify as stringifyToml } from "smol-toml";
 import { resolveDbPath, openDatabase } from "./database";
 import { cmdSessions } from "./cli-sessions";
 import { cmdQuery } from "./cli-query";
+import { loadConfig, saveConfig, getConfigPath } from "./config";
 
 // ---------------------------------------------------------------------------
 // Paths — OpenCode
@@ -1644,6 +1646,15 @@ function status(): void {
     } catch { /* DB might be empty */ }
   }
 
+  const config = loadConfig();
+  console.log(bold("\n  Config"));
+  if (config.postHookCommand) {
+    console.log(`  ${green("✓")}  Post-hook   ${dim(config.postHookCommand)}`);
+  } else {
+    console.log(`  ${dim("○")}  ${dim("Post-hook   (not set)")}`);
+  }
+  console.log(`  ${dim("Config file:")} ${getConfigPath()}`);
+
   const allOk = (!openCodeInstalled || (
     fs.existsSync(getOpenCodePluginDst()) &&
     fs.existsSync(getOpenCodeSkillDst()) &&
@@ -1827,6 +1838,10 @@ ${bold("Usage:")}
   npx code-session-memory sessions delete <id>            Delete a session from the DB
   npx code-session-memory sessions purge --days <n>       Delete sessions older than N days (interactive)
   npx code-session-memory sessions purge --days <n> --yes Delete sessions older than N days (no prompt)
+  npx code-session-memory config show                     Show current configuration
+  npx code-session-memory config set post-hook-command "…" Set a command to run after each indexing
+  npx code-session-memory config get post-hook-command     Get the current post-hook command
+  npx code-session-memory config unset post-hook-command   Remove the post-hook command
   npx code-session-memory help                            Show this help
 
 ${bold("Environment variables:")}
@@ -1838,7 +1853,63 @@ ${bold("Environment variables:")}
   VSCODE_CONFIG_DIR         Override the VS Code config directory
   CODEX_HOME                Override the Codex home directory (~/.codex)
   GEMINI_CONFIG_DIR         Override the Gemini CLI config directory (~/.gemini)
+  OPENCODE_MEMORY_CONFIG_PATH  Override the config file path
 `);
+}
+
+// ---------------------------------------------------------------------------
+// config command
+// ---------------------------------------------------------------------------
+
+function cmdConfig(args: string[]): void {
+  const sub = args[0];
+
+  switch (sub) {
+    case "set": {
+      const key = args[1];
+      const value = args.slice(2).join(" ");
+      if (key !== "post-hook-command" || !value) {
+        console.error('Usage: config set post-hook-command "<command>"');
+        process.exit(1);
+      }
+      const config = loadConfig();
+      config.postHookCommand = value;
+      saveConfig(config);
+      console.log(`${green("Done.")} post-hook-command set.`);
+      console.log(dim(`Config: ${getConfigPath()}`));
+      break;
+    }
+    case "get": {
+      const key = args[1];
+      if (key !== "post-hook-command") {
+        console.error("Known keys: post-hook-command");
+        process.exit(1);
+      }
+      const config = loadConfig();
+      console.log(config.postHookCommand ?? dim("(not set)"));
+      break;
+    }
+    case "unset": {
+      const key = args[1];
+      if (key !== "post-hook-command") {
+        console.error("Known keys: post-hook-command");
+        process.exit(1);
+      }
+      const config = loadConfig();
+      delete config.postHookCommand;
+      saveConfig(config);
+      console.log(`${green("Done.")} post-hook-command removed.`);
+      break;
+    }
+    case "show": {
+      const config = loadConfig();
+      console.log(JSON.stringify(config, null, 2));
+      break;
+    }
+    default:
+      console.error("Usage: config <set|get|unset|show> [key] [value]");
+      process.exit(1);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1868,6 +1939,9 @@ switch (cmd) {
       console.error(err instanceof Error ? err.message : String(err));
       process.exit(1);
     });
+    break;
+  case "config":
+    cmdConfig(process.argv.slice(3));
     break;
   case "help":
   case "--help":

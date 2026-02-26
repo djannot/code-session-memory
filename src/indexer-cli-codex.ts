@@ -15,6 +15,7 @@ import os from "os";
 import { resolveDbPath, openDatabase, getSessionMeta } from "./database";
 import { indexNewMessages } from "./indexer";
 import { codexSessionToMessages, deriveCodexSessionTitle } from "./codex-session-to-messages";
+import { runPostHookCommand } from "./post-hook";
 
 function getCodexHome(): string {
   return process.env.CODEX_HOME ?? path.join(os.homedir(), ".codex");
@@ -105,12 +106,16 @@ async function main() {
   const dbPath = resolveDbPath();
   const db = openDatabase({ dbPath });
 
+  let result = { indexed: 0, skipped: 0 };
+  let indexError: string | undefined;
+  let title = "";
+
   try {
     const messages = codexSessionToMessages(sessionFilePath);
     if (messages.length === 0) return;
 
     const existingMeta = getSessionMeta(db, threadId);
-    const title = existingMeta?.session_title
+    title = existingMeta?.session_title
       || deriveCodexSessionTitle(messages, payload["last-assistant-message"]);
 
     const session = {
@@ -119,13 +124,23 @@ async function main() {
       directory: cwd ?? "",
     };
 
-    await indexNewMessages(db, session, messages, "codex");
+    result = await indexNewMessages(db, session, messages, "codex");
   } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : String(err);
-    process.stderr.write(`[code-session-memory] Indexing error: ${msg}\n`);
+    indexError = err instanceof Error ? err.message : String(err);
+    process.stderr.write(`[code-session-memory] Indexing error: ${indexError}\n`);
   } finally {
     db.close();
   }
+
+  runPostHookCommand({
+    source: "codex",
+    sessionId: threadId,
+    sessionTitle: title,
+    project: cwd,
+    indexedCount: result.indexed,
+    success: !indexError,
+    errorMessage: indexError,
+  });
 }
 
 main().catch((err) => {

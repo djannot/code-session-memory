@@ -16,6 +16,7 @@
 import { APIConnectionError, RateLimitError } from "openai";
 import { resolveDbPath, openDatabase } from "./database";
 import { indexNewMessages } from "./indexer";
+import { runPostHookCommand } from "./post-hook";
 import { getSessionFromOpenCodeDb, getMessagesFromOpenCodeDb } from "./opencode-db-to-messages";
 import type { FullMessage } from "./types";
 
@@ -120,18 +121,33 @@ async function main() {
 
   const dbPath = resolveDbPath();
   const db = openDatabase({ dbPath });
+
+  let result = { indexed: 0, skipped: 0 };
+  let indexError: string | undefined;
+
   try {
-    await indexNewMessages(
+    result = await indexNewMessages(
       db,
       { id: session.id, title: session.title, directory: session.directory },
       messages,
       "opencode",
     );
+  } catch (err: unknown) {
+    indexError = err instanceof Error ? err.message : String(err);
+    process.stderr.write(`[code-session-memory] Indexing error: ${indexError}\n`);
   } finally {
     db.close();
   }
 
-  // No output — the plugin runs this silently via Bun's $.quiet()
+  runPostHookCommand({
+    source: "opencode",
+    sessionId: session.id,
+    sessionTitle: session.title,
+    project: session.directory,
+    indexedCount: result.indexed,
+    success: !indexError,
+    errorMessage: indexError,
+  });
 }
 
 main().catch((err) => {
