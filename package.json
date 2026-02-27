@@ -1,6 +1,6 @@
 {
   "name": "code-session-memory",
-  "version": "0.12.1",
+  "version": "0.13.0",
   "description": "Automatically index OpenCode, Claude Code, Cursor, VS Code, Codex, and Gemini CLI sessions into a shared sqlite-vec vector database for semantic search across your AI coding history",
   "type": "commonjs",
   "main": "dist/src/indexer.js",
@@ -14,8 +14,10 @@
     "skill/"
   ],
   "scripts": {
-    "build": "tsc && chmod 755 dist/src/cli.js dist/mcp/index.js dist/src/indexer-cli-vscode.js dist/src/indexer-cli-codex.js dist/src/indexer-cli-gemini.js",
+    "build": "tsc && npm run build:web && chmod 755 dist/src/cli.js dist/mcp/index.js dist/src/indexer-cli-vscode.js dist/src/indexer-cli-codex.js dist/src/indexer-cli-gemini.js",
+    "build:web": "cd web && npm install && npm run build",
     "build:watch": "tsc --watch",
+    "dev:web": "cd web && npm run dev",
     "start:mcp": "node dist/mcp/index.js",
     "test": "vitest run",
     "test:watch": "vitest",
@@ -48,6 +50,7 @@
     "@opencode-ai/plugin": "^1.2.8",
     "@opencode-ai/sdk": "^1.2.8",
     "better-sqlite3": "^11.9.1",
+    "express": "^5.2.1",
     "openai": "^4.20.1",
     "smol-toml": "^1.6.0",
     "sqlite-vec": "0.1.7-alpha.2",
@@ -55,6 +58,7 @@
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.12",
+    "@types/express": "^5.0.6",
     "@types/node": "^20.10.0",
     "@vitest/coverage-v8": "^2.0.0",
     "tsx": "^4.19.2",

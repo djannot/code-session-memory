@@ -1827,6 +1827,7 @@ ${bold("Usage:")}
   npx code-session-memory sessions delete <id>            Delete a session from the DB
   npx code-session-memory sessions purge --days <n>       Delete sessions older than N days (interactive)
   npx code-session-memory sessions purge --days <n> --yes Delete sessions older than N days (no prompt)
+  npx code-session-memory web [--port <n>]                Start the web UI (default: port 3333)
   npx code-session-memory help                            Show this help
 
 ${bold("Environment variables:")}
@@ -1869,6 +1870,23 @@ switch (cmd) {
       process.exit(1);
     });
     break;
+  case "web": {
+    const webArgs = process.argv.slice(3);
+    let port = 3333;
+    let host = "localhost";
+    const portIdx = webArgs.indexOf("--port");
+    if (portIdx !== -1 && webArgs[portIdx + 1]) {
+      const p = parseInt(webArgs[portIdx + 1], 10);
+      if (!isNaN(p) && p > 0) port = p;
+    }
+    const hostIdx = webArgs.indexOf("--host");
+    if (hostIdx !== -1 && webArgs[hostIdx + 1]) {
+      host = webArgs[hostIdx + 1];
+    }
+    const { startWebServer } = require("./web/server");
+    startWebServer({ port, host });
+    break;
+  }
   case "help":
   case "--help":
   case "-h":        help();      break;

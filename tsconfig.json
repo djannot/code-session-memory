@@ -15,5 +15,5 @@
     "sourceMap": true
   },
   "include": ["src/**/*", "mcp/**/*"],
-  "exclude": ["node_modules", "dist", "tests"]
+  "exclude": ["node_modules", "dist", "tests", "web"]
 }

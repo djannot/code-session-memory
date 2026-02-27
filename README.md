@@ -256,6 +256,34 @@ How can I add JWT authentication to the Express middleware?
 
 > **Note:** Deleting a session only removes it from the database. If the original session files still exist on disk, the session will be re-indexed automatically on the next agent turn.
 
+### Web UI
+
+A full-featured web interface provides the same capabilities as the CLI in a modern browser-based dashboard:
+
+```bash
+npx code-session-memory web
+```
+
+Open `http://localhost:3333` in your browser. The web UI includes:
+
+- **Search** — Semantic search with filters (source, date range, result limit)
+- **Sessions** — Browse, filter, and manage all indexed sessions
+- **Session detail** — View all chunks of a session in order
+- **Status** — Database stats and per-tool installation status
+- **Delete / Purge** — Remove individual sessions or purge old ones
+
+Options:
+| Flag | Default | Description |
+|---|---|---|
+| `--port <n>` | `3333` | Port to listen on |
+| `--host <h>` | `localhost` | Host to bind to (use `0.0.0.0` for network access) |
+
+For development with hot reload:
+```bash
+npx code-session-memory web              # API server on :3333
+npm run dev:web                           # Vite dev server on :5173 (proxies /api to :3333)
+```
+
 ### Asking the agent about past sessions
 
 The installed skill teaches the agent when and how to use these tools. Example prompts:
@@ -319,9 +347,13 @@ code-session-memory/
 │   ├── indexer-cli-vscode.ts            # Node.js subprocess (called by VS Code Stop hook)
 │   ├── indexer-cli-codex.ts              # Node.js subprocess (called by Codex notify hook)
 │   ├── indexer-cli-gemini.ts             # Node.js subprocess (called by Gemini CLI AfterAgent hook)
-│   ├── cli.ts                            # install / status / uninstall / reset-db / query commands
+│   ├── cli.ts                            # install / status / uninstall / reset-db / query / web commands
 │   ├── cli-query.ts                      # query command: semantic search from the terminal
-│   └── cli-sessions.ts                   # sessions list / print / delete / purge (TUI)
+│   ├── cli-sessions.ts                   # sessions list / print / delete / purge (TUI)
+│   ├── status.ts                         # Shared status helpers (tool detection, DB stats)
+│   └── web/
+│       ├── server.ts                     # Express server (API + static files + SPA fallback)
+│       └── api-routes.ts                 # REST API route handlers
 ├── mcp/
 │   ├── server.ts                 # MCP query handlers (testable, injected deps)
 │   └── index.ts                  # MCP stdio server entry point
@@ -329,6 +361,14 @@ code-session-memory/
 │   └── memory.ts                 # OpenCode plugin (session.idle hook)
 ├── skill/
 │   └── memory.md                 # Skill instructions (injected into all tools)
+├── web/                           # React + Vite + Tailwind SPA (web UI)
+│   ├── src/
+│   │   ├── api/client.ts          # Fetch wrapper for REST API
+│   │   ├── components/            # Reusable UI components
+│   │   ├── pages/                 # Route pages (Search, Sessions, Status)
+│   │   └── hooks/                 # React hooks for data fetching
+│   ├── vite.config.ts
+│   └── package.json
 ├── scripts/
 │   └── generate-fixtures.ts      # Generates committed e2e test fixtures (run manually)
 └── tests/
@@ -357,8 +397,14 @@ code-session-memory/
 # Install dependencies
 npm install
 
-# Build
+# Build (backend + web UI)
 npm run build
+
+# Build web UI only
+npm run build:web
+
+# Run web UI dev server (hot reload, proxies API to :3333)
+npm run dev:web
 
 # Run tests
 npm test
