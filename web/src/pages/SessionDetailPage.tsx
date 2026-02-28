@@ -13,7 +13,7 @@ export default function SessionDetailPage() {
   if (loading) {
     return (
       <div className="flex justify-center py-12">
-        <svg className="w-6 h-6 animate-spin text-slate-500" fill="none" viewBox="0 0 24 24">
+        <svg className="w-6 h-6 animate-spin text-violet-400" fill="none" viewBox="0 0 24 24">
           <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
           <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
         </svg>
@@ -23,7 +23,7 @@ export default function SessionDetailPage() {
 
   if (error) {
     return (
-      <div className="bg-red-500/10 border border-red-500/30 rounded-xl p-4 text-sm text-red-300">
+      <div className="glass rounded-xl p-4 text-sm text-red-700 bg-red-100/30 shadow-sm">
         {error}
       </div>
     );
@@ -31,7 +31,7 @@ export default function SessionDetailPage() {
 
   if (!session) {
     return (
-      <div className="text-center py-12 text-slate-500">
+      <div className="text-center py-12 text-gray-400">
         Session not found.
       </div>
     );
@@ -46,7 +46,7 @@ export default function SessionDetailPage() {
     <>
       <button
         onClick={() => navigate("/sessions")}
-        className="flex items-center gap-1 text-sm text-slate-500 hover:text-slate-300 mb-4 transition-colors cursor-pointer"
+        className="flex items-center gap-1 text-sm text-gray-500 hover:text-gray-700 mb-4 transition-colors cursor-pointer"
       >
         <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />

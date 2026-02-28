@@ -9,13 +9,12 @@ const navItems = [
 export default function Layout() {
   return (
     <div className="min-h-screen flex flex-col">
-      {/* Top nav bar */}
-      <header className="border-b border-slate-800 bg-slate-950/80 backdrop-blur-sm sticky top-0 z-40">
+      <header className="glass-strong sticky top-0 z-40 shadow-sm">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex items-center justify-between h-14">
             <div className="flex items-center gap-2">
-              <div className="w-2 h-2 rounded-full bg-emerald-400" />
-              <span className="text-sm font-semibold text-slate-200 tracking-tight">
+              <div className="w-2 h-2 rounded-full bg-violet-500 shadow-lg shadow-violet-500/50" />
+              <span className="text-sm font-semibold text-gray-800 tracking-tight">
                 code-session-memory
               </span>
             </div>
@@ -26,10 +25,10 @@ export default function Layout() {
                   to={item.to}
                   end={item.to === "/"}
                   className={({ isActive }) =>
-                    `flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm transition-colors ${
+                    `flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm transition-all ${
                       isActive
-                        ? "bg-slate-800 text-white"
-                        : "text-slate-400 hover:text-slate-200 hover:bg-slate-800/50"
+                        ? "bg-white/60 text-gray-900 font-medium shadow-sm"
+                        : "text-gray-500 hover:text-gray-700 hover:bg-white/40"
                     }`
                   }
                 >
@@ -44,7 +43,6 @@ export default function Layout() {
         </div>
       </header>
 
-      {/* Content */}
       <main className="flex-1 max-w-7xl mx-auto w-full px-4 sm:px-6 lg:px-8 py-6">
         <Outlet />
       </main>

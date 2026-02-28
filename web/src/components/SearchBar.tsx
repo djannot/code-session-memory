@@ -38,7 +38,7 @@ export default function SearchBar({ onSearch, loading }: SearchBarProps) {
       <div className="flex gap-2">
         <div className="relative flex-1">
           <svg
-            className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500"
+            className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400"
             fill="none"
             stroke="currentColor"
             viewBox="0 0 24 24"
@@ -55,16 +55,16 @@ export default function SearchBar({ onSearch, loading }: SearchBarProps) {
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder="Search across all sessions..."
-            className="w-full pl-10 pr-4 py-2.5 bg-slate-900 border border-slate-700 rounded-xl text-sm text-slate-100 placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-cyan-500/40 focus:border-cyan-500/40 transition-all"
+            className="w-full pl-10 pr-4 py-2.5 glass rounded-xl text-sm text-gray-800 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-violet-400/50 shadow-sm transition-all"
           />
         </div>
         <button
           type="button"
           onClick={() => setShowFilters(!showFilters)}
-          className={`px-3 py-2.5 rounded-xl border text-sm transition-colors cursor-pointer ${
+          className={`px-3 py-2.5 rounded-xl text-sm transition-all cursor-pointer shadow-sm ${
             showFilters
-              ? "bg-slate-800 border-slate-600 text-slate-200"
-              : "bg-slate-900 border-slate-700 text-slate-400 hover:text-slate-200"
+              ? "glass-strong text-gray-700"
+              : "glass text-gray-500 hover:text-gray-700"
           }`}
         >
           <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -74,7 +74,7 @@ export default function SearchBar({ onSearch, loading }: SearchBarProps) {
         <button
           type="submit"
           disabled={loading || !query.trim()}
-          className="px-5 py-2.5 bg-cyan-600 text-white text-sm font-medium rounded-xl hover:bg-cyan-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors cursor-pointer"
+          className="px-5 py-2.5 bg-violet-600 text-white text-sm font-medium rounded-xl hover:bg-violet-500 disabled:opacity-50 disabled:cursor-not-allowed transition-all cursor-pointer shadow-md shadow-violet-600/25"
         >
           {loading ? (
             <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
@@ -88,13 +88,13 @@ export default function SearchBar({ onSearch, loading }: SearchBarProps) {
       </div>
 
       {showFilters && (
-        <div className="flex flex-wrap gap-3 p-3 bg-slate-900/50 border border-slate-800 rounded-xl">
+        <div className="flex flex-wrap gap-3 p-3 glass rounded-xl shadow-sm">
           <div className="flex flex-col gap-1">
-            <label className="text-xs text-slate-500">Source</label>
+            <label className="text-xs text-gray-500">Source</label>
             <select
               value={source}
               onChange={(e) => setSource(e.target.value)}
-              className="px-3 py-1.5 bg-slate-800 border border-slate-700 rounded-lg text-sm text-slate-200 focus:outline-none focus:ring-1 focus:ring-cyan-500/40"
+              className="px-3 py-1.5 glass rounded-lg text-sm text-gray-700 focus:outline-none focus:ring-1 focus:ring-violet-400/50"
             >
               <option value="">All sources</option>
               {SOURCES.filter(Boolean).map((s) => (
@@ -103,32 +103,32 @@ export default function SearchBar({ onSearch, loading }: SearchBarProps) {
             </select>
           </div>
           <div className="flex flex-col gap-1">
-            <label className="text-xs text-slate-500">From</label>
+            <label className="text-xs text-gray-500">From</label>
             <input
               type="date"
               value={fromDate}
               onChange={(e) => setFromDate(e.target.value)}
-              className="px-3 py-1.5 bg-slate-800 border border-slate-700 rounded-lg text-sm text-slate-200 focus:outline-none focus:ring-1 focus:ring-cyan-500/40"
+              className="px-3 py-1.5 glass rounded-lg text-sm text-gray-700 focus:outline-none focus:ring-1 focus:ring-violet-400/50"
             />
           </div>
           <div className="flex flex-col gap-1">
-            <label className="text-xs text-slate-500">To</label>
+            <label className="text-xs text-gray-500">To</label>
             <input
               type="date"
               value={toDate}
               onChange={(e) => setToDate(e.target.value)}
-              className="px-3 py-1.5 bg-slate-800 border border-slate-700 rounded-lg text-sm text-slate-200 focus:outline-none focus:ring-1 focus:ring-cyan-500/40"
+              className="px-3 py-1.5 glass rounded-lg text-sm text-gray-700 focus:outline-none focus:ring-1 focus:ring-violet-400/50"
             />
           </div>
           <div className="flex flex-col gap-1">
-            <label className="text-xs text-slate-500">Limit</label>
+            <label className="text-xs text-gray-500">Limit</label>
             <input
               type="number"
               min={1}
               max={50}
               value={limit}
               onChange={(e) => setLimit(Number(e.target.value))}
-              className="w-20 px-3 py-1.5 bg-slate-800 border border-slate-700 rounded-lg text-sm text-slate-200 focus:outline-none focus:ring-1 focus:ring-cyan-500/40"
+              className="w-20 px-3 py-1.5 glass rounded-lg text-sm text-gray-700 focus:outline-none focus:ring-1 focus:ring-violet-400/50"
             />
           </div>
         </div>

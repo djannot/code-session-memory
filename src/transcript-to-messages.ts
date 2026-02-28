@@ -21,6 +21,21 @@ import fs from "fs";
 import type { FullMessage, MessagePart } from "./types";
 
 // ---------------------------------------------------------------------------
+// IDE context tag stripping
+// ---------------------------------------------------------------------------
+
+/** Regex to match and remove IDE-injected XML tags and their content */
+const IDE_TAG_RE = /<(ide_opened_file|ide_selection|system-reminder)>[\s\S]*?<\/\1>/g;
+
+/**
+ * Strips IDE context tags (ide_opened_file, ide_selection, system-reminder)
+ * from user message text. Returns the cleaned text trimmed.
+ */
+function stripIdeContextTags(text: string): string {
+  return text.replace(IDE_TAG_RE, "").trim();
+}
+
+// ---------------------------------------------------------------------------
 // Raw transcript line shapes
 // ---------------------------------------------------------------------------
 
@@ -33,7 +48,7 @@ interface TranscriptUserLine {
   isApiErrorMessage?: boolean;
   message: {
     role: "user";
-    content: string | TranscriptToolResult[];
+    content: string | (TranscriptToolResult | TranscriptToolResultContentBlock)[];
   };
   toolUseResult?: {
     stdout?: string;
@@ -105,21 +120,29 @@ function convertUserMessage(line: TranscriptUserLine): FullMessage | null {
   const parts: MessagePart[] = [];
 
   if (typeof content === "string") {
-    const text = content.trim();
+    const text = stripIdeContextTags(content);
     // Skip empty, slash-commands, and local-command XML noise
     if (!text) return null;
     if (text.startsWith("<local-command") || text.startsWith("<command-name>")) return null;
     parts.push({ type: "text", text });
   } else if (Array.isArray(content)) {
-    // Tool results
+    // Content array may contain text blocks AND/OR tool_result blocks.
+    // Claude Code (especially via VS Code extension) sends user messages
+    // with content as [{type: "text", text: "..."}] instead of a plain string.
     for (const block of content) {
-      if (block.type === "tool_result") {
+      if (block.type === "text" && "text" in block) {
+        const text = stripIdeContextTags(block.text ?? "");
+        if (text && !text.startsWith("<local-command") && !text.startsWith("<command-name>")) {
+          parts.push({ type: "text", text });
+        }
+      } else if (block.type === "tool_result" && "tool_use_id" in block) {
+        const trBlock = block as TranscriptToolResult;
         // content may be a plain string or an array of { type: "text", text } blocks
         let resultText: string;
-        if (typeof block.content === "string") {
-          resultText = block.content;
-        } else if (Array.isArray(block.content)) {
-          resultText = block.content
+        if (typeof trBlock.content === "string") {
+          resultText = trBlock.content;
+        } else if (Array.isArray(trBlock.content)) {
+          resultText = trBlock.content
             .filter((b) => b.type === "text")
             .map((b) => b.text)
             .join("\n");
@@ -129,9 +152,9 @@ function convertUserMessage(line: TranscriptUserLine): FullMessage | null {
         parts.push({
           type: "tool-invocation",
           toolName: "tool_result",
-          toolCallId: block.tool_use_id,
+          toolCallId: trBlock.tool_use_id,
           state: "result",
-          result: resultText || (block.is_error ? "(error)" : "(no output)"),
+          result: resultText || (trBlock.is_error ? "(error)" : "(no output)"),
         });
       }
     }
@@ -269,8 +292,8 @@ export function parseTranscript(transcriptPath: string): FullMessage[] {
     if (line.type !== "user") continue;
     const ul = line as TranscriptUserLine;
     if (Array.isArray(ul.message.content)) {
-      for (const block of ul.message.content as TranscriptToolResult[]) {
-        if (block.type === "tool_result") {
+      for (const block of ul.message.content) {
+        if (block.type === "tool_result" && "tool_use_id" in block) {
           let text: string;
           if (typeof block.content === "string") {
             text = block.content ?? "";

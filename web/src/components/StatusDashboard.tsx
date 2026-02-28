@@ -27,14 +27,14 @@ export default function StatusDashboard({ status }: { status: StatusResult }) {
         <StatCard
           label="Status"
           value={status.allOk ? "OK" : "Issues"}
-          valueClass={status.allOk ? "text-emerald-400" : "text-amber-400"}
+          valueClass={status.allOk ? "text-emerald-600" : "text-amber-600"}
         />
       </div>
 
       {/* Sessions by source */}
       {status.sessionsBySource.length > 0 && (
-        <div className="bg-slate-900/50 border border-slate-800 rounded-xl p-5">
-          <h3 className="text-sm font-medium text-slate-300 mb-4">Sessions by Source</h3>
+        <div className="glass rounded-xl p-5 shadow-sm">
+          <h3 className="text-sm font-medium text-gray-700 mb-4">Sessions by Source</h3>
           <div className="space-y-3">
             {status.sessionsBySource.map((s) => {
               const pct = status.totalSessions > 0
@@ -45,13 +45,13 @@ export default function StatusDashboard({ status }: { status: StatusResult }) {
                   <div className="w-24">
                     <SourceBadge source={s.source} />
                   </div>
-                  <div className="flex-1 h-2 bg-slate-800 rounded-full overflow-hidden">
+                  <div className="flex-1 h-2 bg-white/40 rounded-full overflow-hidden">
                     <div
-                      className="h-full bg-cyan-500/50 rounded-full transition-all"
+                      className="h-full bg-violet-400 rounded-full transition-all"
                       style={{ width: `${pct}%` }}
                     />
                   </div>
-                  <span className="text-xs font-mono text-slate-500 w-12 text-right">
+                  <span className="text-xs font-mono text-gray-500 w-12 text-right">
                     {s.count}
                   </span>
                 </div>
@@ -62,38 +62,38 @@ export default function StatusDashboard({ status }: { status: StatusResult }) {
       )}
 
       {/* Tool installation status */}
-      <div className="bg-slate-900/50 border border-slate-800 rounded-xl p-5">
-        <h3 className="text-sm font-medium text-slate-300 mb-4">Tool Installation</h3>
+      <div className="glass rounded-xl p-5 shadow-sm">
+        <h3 className="text-sm font-medium text-gray-700 mb-4">Tool Installation</h3>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           {Object.entries(status.tools).map(([key, tool]) => (
             <div
               key={key}
-              className={`border rounded-lg p-3 ${
+              className={`rounded-lg p-3 ${
                 !tool.installed
-                  ? "border-slate-800/50 bg-slate-950/30"
-                  : "border-slate-800 bg-slate-900/30"
+                  ? "bg-white/20"
+                  : "glass-subtle"
               }`}
             >
               <div className="flex items-center justify-between mb-2">
-                <span className="text-sm font-medium text-slate-200">
+                <span className="text-sm font-medium text-gray-800">
                   {toolDisplayNames[key] || key}
                 </span>
                 {!tool.installed ? (
-                  <span className="text-xs text-slate-600">Not installed</span>
+                  <span className="text-xs text-gray-400">Not installed</span>
                 ) : tool.components.every((c) => c.ok) ? (
-                  <span className="text-xs text-emerald-400">All OK</span>
+                  <span className="text-xs text-emerald-600">All OK</span>
                 ) : (
-                  <span className="text-xs text-amber-400">Issues</span>
+                  <span className="text-xs text-amber-600">Issues</span>
                 )}
               </div>
               {tool.installed && (
                 <div className="space-y-1">
                   {tool.components.map((c) => (
                     <div key={c.name} className="flex items-center gap-2 text-xs">
-                      <span className={c.ok ? "text-emerald-400" : "text-red-400"}>
+                      <span className={c.ok ? "text-emerald-500" : "text-red-500"}>
                         {c.ok ? "\u2713" : "\u2717"}
                       </span>
-                      <span className="text-slate-400">{c.name}</span>
+                      <span className="text-gray-600">{c.name}</span>
                     </div>
                   ))}
                 </div>
@@ -104,7 +104,7 @@ export default function StatusDashboard({ status }: { status: StatusResult }) {
       </div>
 
       {/* DB path */}
-      <div className="text-xs text-slate-600 font-mono">
+      <div className="text-xs text-gray-400 font-mono">
         DB: {status.dbPath}
       </div>
     </div>
@@ -114,15 +114,15 @@ export default function StatusDashboard({ status }: { status: StatusResult }) {
 function StatCard({
   label,
   value,
-  valueClass = "text-slate-100",
+  valueClass = "text-gray-900",
 }: {
   label: string;
   value: string;
   valueClass?: string;
 }) {
   return (
-    <div className="bg-slate-900/50 border border-slate-800 rounded-xl p-4">
-      <div className="text-xs text-slate-500 mb-1">{label}</div>
+    <div className="glass rounded-xl p-4 shadow-sm">
+      <div className="text-xs text-gray-500 mb-1">{label}</div>
       <div className={`text-xl font-semibold ${valueClass}`}>{value}</div>
     </div>
   );

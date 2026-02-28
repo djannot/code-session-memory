@@ -6,7 +6,7 @@ export default function SearchResults({ results }: { results: QueryResult[] }) {
 
   return (
     <div className="space-y-3">
-      <div className="text-sm text-slate-400">
+      <div className="text-sm text-gray-500">
         {results.length} result{results.length !== 1 ? "s" : ""}
       </div>
       {results.map((result, i) => (

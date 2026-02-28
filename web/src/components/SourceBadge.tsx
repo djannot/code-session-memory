@@ -1,16 +1,16 @@
 const sourceColors: Record<string, string> = {
-  opencode: "bg-cyan-500/20 text-cyan-300 border-cyan-500/30",
-  "claude-code": "bg-amber-500/20 text-amber-300 border-amber-500/30",
-  cursor: "bg-emerald-500/20 text-emerald-300 border-emerald-500/30",
-  vscode: "bg-blue-500/20 text-blue-300 border-blue-500/30",
-  codex: "bg-violet-500/20 text-violet-300 border-violet-500/30",
-  "gemini-cli": "bg-rose-500/20 text-rose-300 border-rose-500/30",
+  opencode: "bg-cyan-200/40 text-cyan-800 border-cyan-300/40",
+  "claude-code": "bg-amber-200/40 text-amber-800 border-amber-300/40",
+  cursor: "bg-emerald-200/40 text-emerald-800 border-emerald-300/40",
+  vscode: "bg-blue-200/40 text-blue-800 border-blue-300/40",
+  codex: "bg-violet-200/40 text-violet-800 border-violet-300/40",
+  "gemini-cli": "bg-rose-200/40 text-rose-800 border-rose-300/40",
 };
 
 export default function SourceBadge({ source }: { source: string }) {
-  const colors = sourceColors[source] || "bg-slate-500/20 text-slate-300 border-slate-500/30";
+  const colors = sourceColors[source] || "bg-gray-200/40 text-gray-700 border-gray-300/40";
   return (
-    <span className={`inline-flex items-center px-2 py-0.5 rounded-md text-xs font-medium border ${colors}`}>
+    <span className={`inline-flex items-center px-2 py-0.5 rounded-md text-xs font-medium border backdrop-blur-sm ${colors}`}>
       {source}
     </span>
   );

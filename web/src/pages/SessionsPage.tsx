@@ -36,14 +36,14 @@ export default function SessionsPage() {
     <div className="space-y-6">
       <div className="flex items-start justify-between gap-4">
         <div>
-          <h1 className="text-xl font-semibold text-slate-100 mb-1">Sessions</h1>
-          <p className="text-sm text-slate-500">
+          <h1 className="text-xl font-semibold text-gray-900 mb-1">Sessions</h1>
+          <p className="text-sm text-gray-500">
             {sessions.length} session{sessions.length !== 1 ? "s" : ""} indexed
           </p>
         </div>
         <button
           onClick={() => setPurgeOpen(true)}
-          className="px-3 py-1.5 text-xs rounded-lg border border-slate-700 text-slate-400 hover:text-slate-200 hover:border-slate-600 transition-colors cursor-pointer"
+          className="px-3 py-1.5 text-xs rounded-lg glass text-gray-500 hover:text-gray-700 hover:bg-white/70 transition-all cursor-pointer shadow-sm"
         >
           Purge old...
         </button>
@@ -54,7 +54,7 @@ export default function SessionsPage() {
         <select
           value={filters.source || ""}
           onChange={(e) => setFilters({ ...filters, source: e.target.value || undefined })}
-          className="px-3 py-1.5 bg-slate-900 border border-slate-800 rounded-lg text-sm text-slate-300 focus:outline-none focus:ring-1 focus:ring-cyan-500/40"
+          className="px-3 py-1.5 glass rounded-lg text-sm text-gray-700 focus:outline-none focus:ring-1 focus:ring-violet-400/50 shadow-sm"
         >
           <option value="">All sources</option>
           {SOURCES.filter(Boolean).map((s) => (
@@ -65,28 +65,28 @@ export default function SessionsPage() {
           type="date"
           value={filters.from || ""}
           onChange={(e) => setFilters({ ...filters, from: e.target.value || undefined })}
-          className="px-3 py-1.5 bg-slate-900 border border-slate-800 rounded-lg text-sm text-slate-300 focus:outline-none focus:ring-1 focus:ring-cyan-500/40"
+          className="px-3 py-1.5 glass rounded-lg text-sm text-gray-700 focus:outline-none focus:ring-1 focus:ring-violet-400/50 shadow-sm"
           placeholder="From"
         />
         <input
           type="date"
           value={filters.to || ""}
           onChange={(e) => setFilters({ ...filters, to: e.target.value || undefined })}
-          className="px-3 py-1.5 bg-slate-900 border border-slate-800 rounded-lg text-sm text-slate-300 focus:outline-none focus:ring-1 focus:ring-cyan-500/40"
+          className="px-3 py-1.5 glass rounded-lg text-sm text-gray-700 focus:outline-none focus:ring-1 focus:ring-violet-400/50 shadow-sm"
           placeholder="To"
         />
       </div>
 
       {error && (
-        <div className="bg-red-500/10 border border-red-500/30 rounded-xl p-4 text-sm text-red-300">
+        <div className="glass rounded-xl p-4 text-sm text-red-700 bg-red-100/30 shadow-sm">
           {error}
         </div>
       )}
 
       {purgeResult && (
-        <div className="bg-emerald-500/10 border border-emerald-500/30 rounded-xl p-4 text-sm text-emerald-300 flex items-center justify-between">
+        <div className="glass rounded-xl p-4 text-sm text-emerald-700 bg-emerald-100/30 shadow-sm flex items-center justify-between">
           {purgeResult}
-          <button onClick={() => setPurgeResult(null)} className="text-emerald-400 hover:text-emerald-300 cursor-pointer">
+          <button onClick={() => setPurgeResult(null)} className="text-emerald-500 hover:text-emerald-700 cursor-pointer">
             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
             </svg>
@@ -96,7 +96,7 @@ export default function SessionsPage() {
 
       {loading ? (
         <div className="flex justify-center py-12">
-          <svg className="w-6 h-6 animate-spin text-slate-500" fill="none" viewBox="0 0 24 24">
+          <svg className="w-6 h-6 animate-spin text-violet-400" fill="none" viewBox="0 0 24 24">
             <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
             <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
           </svg>
@@ -117,10 +117,10 @@ export default function SessionsPage() {
 
       {/* Purge dialog */}
       {purgeOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
-          <div className="bg-slate-900 border border-slate-700 rounded-xl shadow-2xl p-6 max-w-md w-full mx-4">
-            <h3 className="text-lg font-semibold text-slate-100 mb-4">Purge old sessions</h3>
-            <label className="block text-sm text-slate-400 mb-2">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/20 backdrop-blur-md">
+          <div className="glass-strong rounded-2xl shadow-2xl p-6 max-w-md w-full mx-4">
+            <h3 className="text-lg font-semibold text-gray-900 mb-4">Purge old sessions</h3>
+            <label className="block text-sm text-gray-600 mb-2">
               Delete sessions older than:
             </label>
             <div className="flex items-center gap-2 mb-6">
@@ -129,20 +129,20 @@ export default function SessionsPage() {
                 min={1}
                 value={purgeDays}
                 onChange={(e) => setPurgeDays(Number(e.target.value))}
-                className="w-24 px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-sm text-slate-200 focus:outline-none focus:ring-1 focus:ring-cyan-500/40"
+                className="w-24 px-3 py-2 glass rounded-lg text-sm text-gray-700 focus:outline-none focus:ring-1 focus:ring-violet-400/50"
               />
-              <span className="text-sm text-slate-400">days</span>
+              <span className="text-sm text-gray-600">days</span>
             </div>
             <div className="flex justify-end gap-3">
               <button
                 onClick={() => setPurgeOpen(false)}
-                className="px-4 py-2 text-sm rounded-lg bg-slate-800 text-slate-300 hover:bg-slate-700 transition-colors cursor-pointer"
+                className="px-4 py-2 text-sm rounded-lg glass text-gray-700 hover:bg-white/70 transition-all cursor-pointer"
               >
                 Cancel
               </button>
               <button
                 onClick={handlePurge}
-                className="px-4 py-2 text-sm rounded-lg bg-red-600 text-white hover:bg-red-500 transition-colors cursor-pointer"
+                className="px-4 py-2 text-sm rounded-lg bg-red-600 text-white hover:bg-red-500 transition-colors cursor-pointer shadow-md shadow-red-600/25"
               >
                 Purge
               </button>
