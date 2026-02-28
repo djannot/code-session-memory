@@ -54,6 +54,7 @@
     "openai": "^4.20.1",
     "smol-toml": "^1.6.0",
     "sqlite-vec": "0.1.7-alpha.2",
+    "umap-js": "^1.4.0",
     "zod": "^3.24.2"
   },
   "devDependencies": {

@@ -5,7 +5,7 @@ export default function SearchResults({ results }: { results: QueryResult[] }) {
   if (results.length === 0) return null;
 
   return (
-    <div className="space-y-3">
+    <div className="space-y-4">
       <div className="text-sm text-gray-500">
         {results.length} result{results.length !== 1 ? "s" : ""}
       </div>

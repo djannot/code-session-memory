@@ -125,6 +125,15 @@ export function initSchema(db: Database, embeddingDimension = DEFAULT_EMBEDDING_
   } catch {
     // Column already exists — ignore
   }
+
+  // Coordinates table for knowledge map (UMAP 2D projections)
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS chunk_coords (
+      chunk_id TEXT PRIMARY KEY,
+      x REAL,
+      y REAL
+    )
+  `);
 }
 
 // ---------------------------------------------------------------------------
@@ -236,6 +245,8 @@ export function queryByEmbedding(
   sourceFilter?: SessionSource,
   fromMs?: number,
   toMs?: number,
+  sectionFilter?: string,
+  minContentLength?: number,
 ): QueryResult[] {
   // sqlite-vec requires the LIMIT (k) constraint to be part of the KNN WHERE
   // clause. We use a CTE to perform the KNN first, then join sessions_meta for
@@ -275,6 +286,16 @@ export function queryByEmbedding(
   if (typeof toMs === "number") {
     sql += " AND knn.created_at <= ?";
     params.push(BigInt(toMs));
+  }
+
+  if (sectionFilter) {
+    sql += " AND LOWER(knn.section) LIKE ?";
+    params.push(sectionFilter.toLowerCase() + "%");
+  }
+
+  if (typeof minContentLength === "number" && minContentLength > 0) {
+    sql += " AND LENGTH(knn.content) >= ?";
+    params.push(minContentLength);
   }
 
   sql += " ORDER BY distance";
@@ -406,11 +427,13 @@ export function getSessionChunksOrdered(db: Database, sessionId: string): ChunkR
  * Returns the number of chunks deleted.
  */
 export function deleteSession(db: Database, sessionId: string): number {
+  const deleteCoords = db.prepare("DELETE FROM chunk_coords WHERE chunk_id IN (SELECT chunk_id FROM vec_items WHERE session_id = ?)");
   const deleteChunks = db.prepare("DELETE FROM vec_items WHERE session_id = ?");
   const deleteMeta   = db.prepare("DELETE FROM sessions_meta WHERE session_id = ?");
 
   let chunkCount = 0;
   db.transaction(() => {
+    deleteCoords.run(sessionId);
     const result = deleteChunks.run(sessionId);
     chunkCount = result.changes;
     deleteMeta.run(sessionId);
@@ -431,11 +454,13 @@ export function deleteSessionsOlderThan(
   if (candidates.length === 0) return { sessions: 0, chunks: 0 };
 
   const deleteChunks = db.prepare("DELETE FROM vec_items WHERE session_id = ?");
+  const deleteCoords = db.prepare("DELETE FROM chunk_coords WHERE chunk_id IN (SELECT chunk_id FROM vec_items WHERE session_id = ?)");
   const deleteMeta   = db.prepare("DELETE FROM sessions_meta WHERE session_id = ?");
 
   let totalChunks = 0;
   db.transaction(() => {
     for (const s of candidates) {
+      deleteCoords.run(s.session_id);
       const result = deleteChunks.run(s.session_id);
       totalChunks += result.changes;
       deleteMeta.run(s.session_id);
@@ -443,4 +468,135 @@ export function deleteSessionsOlderThan(
   })();
 
   return { sessions: candidates.length, chunks: totalChunks };
+}
+
+// ---------------------------------------------------------------------------
+// Knowledge map helpers (chunk_coords)
+// ---------------------------------------------------------------------------
+
+export function upsertChunkCoords(
+  db: Database,
+  coords: Array<{ chunkId: string; x: number; y: number }>,
+): void {
+  if (coords.length === 0) return;
+  const stmt = db.prepare(`
+    INSERT INTO chunk_coords (chunk_id, x, y)
+    VALUES (?, ?, ?)
+    ON CONFLICT(chunk_id) DO UPDATE SET x = excluded.x, y = excluded.y
+  `);
+  const insertMany = db.transaction((...args: unknown[]) => {
+    const rows = args[0] as Array<{ chunkId: string; x: number; y: number }>;
+    for (const row of rows) {
+      stmt.run(row.chunkId, row.x, row.y);
+    }
+  });
+  insertMany(coords);
+}
+
+export function getChunkCoordsCount(db: Database): number {
+  const row = db.prepare("SELECT COUNT(*) as count FROM chunk_coords").get() as { count: number };
+  return Number(row.count);
+}
+
+export function getTotalChunkCount(db: Database): number {
+  const row = db.prepare("SELECT COUNT(*) as count FROM vec_items").get() as { count: number };
+  return Number(row.count);
+}
+
+export function clearChunkCoords(db: Database): void {
+  db.exec("DELETE FROM chunk_coords");
+}
+
+export interface MapChunkRow {
+  chunk_id: string;
+  x: number;
+  y: number;
+  url: string;
+  section: string;
+  heading_hierarchy: string;
+  chunk_index: number;
+  total_chunks: number;
+  content: string;
+  session_id: string;
+  session_title: string;
+  project: string;
+  source: string;
+}
+
+export function getMapOverviewChunks(
+  db: Database,
+  limit: number,
+  sectionFilter?: string,
+  minContentLength?: number,
+): MapChunkRow[] {
+  let sql = `
+    SELECT
+      v.chunk_id, cc.x, cc.y, v.url, v.section, v.heading_hierarchy,
+      v.chunk_index, v.total_chunks, v.content,
+      v.session_id, v.session_title, v.project,
+      COALESCE(m.source, 'unknown') as source
+    FROM chunk_coords cc
+    JOIN vec_items v ON v.chunk_id = cc.chunk_id
+    LEFT JOIN sessions_meta m ON v.session_id = m.session_id
+    WHERE 1=1
+  `;
+  const params: unknown[] = [];
+
+  if (sectionFilter) {
+    sql += " AND LOWER(v.section) LIKE ?";
+    params.push(sectionFilter.toLowerCase() + "%");
+  }
+
+  if (typeof minContentLength === "number" && minContentLength > 0) {
+    sql += " AND LENGTH(v.content) >= ?";
+    params.push(minContentLength);
+  }
+
+  sql += " ORDER BY RANDOM() LIMIT ?";
+  params.push(limit);
+
+  return db.prepare(sql).all(...params) as MapChunkRow[];
+}
+
+export function getMapChunksByIds(db: Database, ids: string[]): MapChunkRow[] {
+  if (ids.length === 0) return [];
+  const placeholders = ids.map(() => "?").join(",");
+  return db.prepare(`
+    SELECT
+      v.chunk_id, cc.x, cc.y, v.url, v.section, v.heading_hierarchy,
+      v.chunk_index, v.total_chunks, v.content,
+      v.session_id, v.session_title, v.project,
+      COALESCE(m.source, 'unknown') as source
+    FROM vec_items v
+    LEFT JOIN chunk_coords cc ON cc.chunk_id = v.chunk_id
+    LEFT JOIN sessions_meta m ON v.session_id = m.session_id
+    WHERE v.chunk_id IN (${placeholders})
+  `).all(...ids) as MapChunkRow[];
+}
+
+export function getAllEmbeddingsWithIds(db: Database): Array<{ chunk_id: string; embedding: Buffer }> {
+  return db.prepare("SELECT chunk_id, embedding FROM vec_items").all() as Array<{ chunk_id: string; embedding: Buffer }>;
+}
+
+export function getChunkContent(db: Database, chunkId: string): string | null {
+  const row = db.prepare("SELECT content FROM vec_items WHERE chunk_id = ? LIMIT 1").get(chunkId) as { content?: string } | undefined;
+  return row?.content ?? null;
+}
+
+export function getEmbeddingByChunkId(db: Database, chunkId: string): Buffer | null {
+  const row = db.prepare("SELECT embedding FROM vec_items WHERE chunk_id = ?").get(chunkId) as { embedding?: Buffer } | undefined;
+  return row?.embedding ?? null;
+}
+
+export function getKnnNeighbors(
+  db: Database,
+  embedding: Float32Array,
+  k: number,
+): Array<{ chunk_id: string; distance: number }> {
+  return db.prepare(`
+    SELECT chunk_id, distance
+    FROM vec_items
+    WHERE embedding MATCH ? AND k = ?
+    ORDER BY distance
+  `).all(embedding, k) as Array<{ chunk_id: string; distance: number }>;
 }

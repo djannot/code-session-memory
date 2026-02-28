@@ -116,3 +116,90 @@ export async function getStatus(): Promise<StatusResult> {
   const res = await fetch(`${BASE}/status`);
   return handleResponse(res);
 }
+
+// ---------------------------------------------------------------------------
+// Knowledge Map types & API
+// ---------------------------------------------------------------------------
+
+export interface VisualizationPoint {
+  id: string;
+  x: number;
+  y: number;
+  score: number | null;
+  type: "result" | "neighbor" | "map" | "focus";
+  url: string;
+  session_id: string;
+  session_title: string;
+  project: string;
+  source: string;
+  section: string;
+  heading_hierarchy: string;
+  chunk_index: number;
+  total_chunks: number;
+  keywords: string[];
+}
+
+export interface VisualizationPayload {
+  points: VisualizationPoint[];
+  center: { x: number; y: number };
+  focusId?: string;
+}
+
+export interface MapStatus {
+  coordsCount: number;
+  totalChunks: number;
+  ready: boolean;
+  computing: boolean;
+}
+
+export async function getMapStatus(): Promise<MapStatus> {
+  const res = await fetch(`${BASE}/map/status`);
+  return handleResponse(res);
+}
+
+export async function computeMapCoords(): Promise<{ success: boolean; count: number }> {
+  const res = await fetch(`${BASE}/map/compute`, { method: "POST" });
+  return handleResponse(res);
+}
+
+export async function getMapOverview(params?: {
+  limit?: number;
+  sectionFilter?: string;
+  minContentLength?: number;
+}): Promise<{ visualization: VisualizationPayload }> {
+  const res = await fetch(`${BASE}/map`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(params ?? {}),
+  });
+  return handleResponse(res);
+}
+
+export async function searchWithMap(params: {
+  queryText: string;
+  source?: string;
+  limit?: number;
+  sectionFilter?: string;
+  minContentLength?: number;
+}): Promise<{ results: QueryResult[]; visualization: VisualizationPayload }> {
+  const res = await fetch(`${BASE}/map/search`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(params),
+  });
+  return handleResponse(res);
+}
+
+export async function getMapNeighbors(chunkId: string, limit?: number): Promise<{ visualization: VisualizationPayload }> {
+  const res = await fetch(`${BASE}/map/neighbors`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ chunk_id: chunkId, limit }),
+  });
+  return handleResponse(res);
+}
+
+export async function getChunkContent(chunkId: string): Promise<{ content: string }> {
+  const res = await fetch(`${BASE}/map/chunk/${encodeURIComponent(chunkId)}`);
+  return handleResponse(res);
+}

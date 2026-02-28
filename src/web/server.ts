@@ -8,6 +8,7 @@
 import express from "express";
 import path from "path";
 import { createApiRouter } from "./api-routes";
+import { createMapRouter } from "./map-routes";
 
 export interface WebServerOptions {
   port: number;
@@ -20,6 +21,7 @@ export function startWebServer(options: WebServerOptions): void {
 
   // API routes
   app.use("/api", createApiRouter());
+  app.use("/api/map", createMapRouter());
 
   // Serve built frontend static files
   const staticDir = path.join(__dirname, "..", "..", "web-dist");
