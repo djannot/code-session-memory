@@ -74,6 +74,7 @@ const provider = createSqliteProvider({
 const { querySessionsHandler, getSessionChunksHandler } = createToolHandlers({
   createEmbedding,
   querySessions: provider.querySessions,
+  querySessionsHybrid: provider.querySessionsHybrid,
   getSessionChunks: provider.getSessionChunks,
 });
 
@@ -94,6 +95,7 @@ const querySessionsSchema = {
   limit: z.number().int().min(1).optional().describe("Maximum number of results to return. Defaults to 5."),
   fromDate: z.string().optional().describe("Return only chunks indexed on or after this date. ISO 8601 format, e.g. '2026-02-01' or '2026-02-20T15:00:00Z'. Optional."),
   toDate: z.string().optional().describe("Return only chunks indexed on or before this date. ISO 8601 format, e.g. '2026-02-20'. A date-only value is treated as end-of-day UTC. Optional."),
+  hybrid: z.boolean().optional().describe("Enable hybrid search (semantic + keyword with RRF merging). Default false (semantic only). Use when searching for exact terms or code identifiers."),
 };
 
 const getSessionChunksSchema = {
@@ -110,7 +112,7 @@ serverAny.tool(
   "query_sessions",
   "Semantically search across all indexed sessions stored in the vector database. Returns the most relevant chunks from past sessions. Sessions from OpenCode, Claude Code, Cursor, VS Code, Codex, and Gemini CLI are indexed into the same shared database.",
   querySessionsSchema,
-  async (args: { queryText: string; project?: string; source?: string; limit?: number; fromDate?: string; toDate?: string }) => {
+  async (args: { queryText: string; project?: string; source?: string; limit?: number; fromDate?: string; toDate?: string; hybrid?: boolean }) => {
     // Parse ISO 8601 date strings into unix milliseconds.
     // For toDate, a date-only string (no time component) is treated as end-of-day UTC
     // by adding 86399999ms (23:59:59.999).

@@ -119,6 +119,22 @@ export function initSchema(db: Database, embeddingDimension = DEFAULT_EMBEDDING_
     );
   `);
 
+  // FTS5 table for keyword search (hybrid search)
+  db.exec(`
+    CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(
+      chunk_id UNINDEXED,
+      content,
+      section UNINDEXED
+    );
+  `);
+
+  // Backfill FTS from vec_items if needed (one-time migration)
+  const ftsCount = db.prepare("SELECT COUNT(*) AS cnt FROM chunks_fts").get() as { cnt: number };
+  const vecCount = db.prepare("SELECT COUNT(*) AS cnt FROM vec_items").get() as { cnt: number };
+  if (ftsCount.cnt === 0 && vecCount.cnt > 0) {
+    db.exec(`INSERT INTO chunks_fts(chunk_id, content, section) SELECT chunk_id, content, section FROM vec_items`);
+  }
+
   // Migrate existing DBs: add source column if missing
   try {
     db.exec(`ALTER TABLE sessions_meta ADD COLUMN source TEXT NOT NULL DEFAULT 'opencode'`);
@@ -190,6 +206,10 @@ export function insertChunks(
     )
   `);
 
+  const insertFts = db.prepare(`
+    INSERT INTO chunks_fts(chunk_id, content, section) VALUES (?, ?, ?)
+  `);
+
   // sqlite-vec does not enforce UNIQUE constraints via INSERT OR IGNORE on
   // virtual tables, so we check for existence first.
   const exists = db.prepare(
@@ -218,6 +238,7 @@ export function insertChunks(
         BigInt(m.message_order ?? 0),
         BigInt(m.created_at ?? Date.now()),
       );
+      insertFts.run(m.chunk_id, chunk.content, m.section);
     }
   });
 
@@ -236,6 +257,7 @@ export function queryByEmbedding(
   sourceFilter?: SessionSource,
   fromMs?: number,
   toMs?: number,
+  sectionFilter?: string,
 ): QueryResult[] {
   // sqlite-vec requires the LIMIT (k) constraint to be part of the KNN WHERE
   // clause. We use a CTE to perform the KNN first, then join sessions_meta for
@@ -277,6 +299,11 @@ export function queryByEmbedding(
     params.push(BigInt(toMs));
   }
 
+  if (sectionFilter) {
+    sql += " AND LOWER(knn.section) LIKE ?";
+    params.push(sectionFilter.toLowerCase() + "%");
+  }
+
   sql += " ORDER BY distance";
 
   const rows = db.prepare(sql).all(...params) as QueryResult[];
@@ -285,6 +312,130 @@ export function queryByEmbedding(
     if (r && typeof r === "object") delete (r as Record<string, unknown>)["embedding"];
   });
   return rows;
+}
+
+/**
+ * Full-text keyword search using FTS5 with BM25 ranking.
+ * Falls back to empty results if the FTS table is empty.
+ */
+export function queryByKeyword(
+  db: Database,
+  queryText: string,
+  topK = 10,
+  projectFilter?: string,
+  sourceFilter?: SessionSource,
+  fromMs?: number,
+  toMs?: number,
+  sectionFilter?: string,
+): QueryResult[] {
+  // Escape FTS5 special characters and wrap terms for prefix matching
+  const sanitized = queryText.replace(/['"*(){}[\]:^~!\\]/g, " ").trim();
+  if (!sanitized) return [];
+
+  let sql = `
+    SELECT
+      v.chunk_id, v.content, v.url, v.section, v.heading_hierarchy,
+      v.chunk_index, v.total_chunks, v.session_id, v.session_title, v.project,
+      v.created_at, m.source,
+      bm25(chunks_fts) AS rank
+    FROM chunks_fts f
+    JOIN vec_items v ON f.chunk_id = v.chunk_id
+    LEFT JOIN sessions_meta m ON v.session_id = m.session_id
+    WHERE chunks_fts MATCH ?
+  `;
+  const params: unknown[] = [sanitized];
+
+  if (projectFilter) {
+    sql += " AND v.project = ?";
+    params.push(projectFilter);
+  }
+  if (sourceFilter) {
+    sql += " AND m.source = ?";
+    params.push(sourceFilter);
+  }
+  if (typeof fromMs === "number") {
+    sql += " AND v.created_at >= ?";
+    params.push(BigInt(fromMs));
+  }
+  if (typeof toMs === "number") {
+    sql += " AND v.created_at <= ?";
+    params.push(BigInt(toMs));
+  }
+  if (sectionFilter) {
+    sql += " AND LOWER(v.section) LIKE ?";
+    params.push(sectionFilter.toLowerCase() + "%");
+  }
+
+  sql += ` ORDER BY rank LIMIT ?`;
+  params.push(topK);
+
+  try {
+    const rows = db.prepare(sql).all(...params) as QueryResult[];
+    rows.forEach((r: unknown) => {
+      if (r && typeof r === "object") {
+        delete (r as Record<string, unknown>)["embedding"];
+        delete (r as Record<string, unknown>)["rank"];
+      }
+    });
+    return rows;
+  } catch {
+    // FTS table might be empty or query might be invalid
+    return [];
+  }
+}
+
+/**
+ * Hybrid search: runs both vector and keyword search, merges results
+ * using Reciprocal Rank Fusion (RRF).
+ */
+export function queryHybrid(
+  db: Database,
+  queryEmbedding: number[],
+  queryText: string,
+  topK = 10,
+  projectFilter?: string,
+  sourceFilter?: SessionSource,
+  fromMs?: number,
+  toMs?: number,
+  sectionFilter?: string,
+): QueryResult[] {
+  const overFetch = topK * 3;
+
+  const vectorResults = queryByEmbedding(
+    db, queryEmbedding, overFetch, projectFilter, sourceFilter, fromMs, toMs, sectionFilter,
+  );
+  const keywordResults = queryByKeyword(
+    db, queryText, overFetch, projectFilter, sourceFilter, fromMs, toMs, sectionFilter,
+  );
+
+  // RRF constant (standard value)
+  const K = 60;
+
+  // Build score map by chunk_id
+  const scores = new Map<string, { score: number; result: QueryResult }>();
+
+  for (let i = 0; i < vectorResults.length; i++) {
+    const r = vectorResults[i];
+    const rrfScore = 1 / (K + i + 1);
+    scores.set(r.chunk_id, { score: rrfScore, result: r });
+  }
+
+  for (let i = 0; i < keywordResults.length; i++) {
+    const r = keywordResults[i];
+    const rrfScore = 1 / (K + i + 1);
+    const existing = scores.get(r.chunk_id);
+    if (existing) {
+      existing.score += rrfScore;
+    } else {
+      scores.set(r.chunk_id, { score: rrfScore, result: r });
+    }
+  }
+
+  // Sort by combined RRF score descending, take topK
+  return Array.from(scores.values())
+    .sort((a, b) => b.score - a.score)
+    .slice(0, topK)
+    .map((entry) => entry.result);
 }
 
 export function getChunksByUrl(
@@ -311,6 +462,34 @@ export function getChunksByUrl(
 
   sql += " ORDER BY chunk_index";
   return db.prepare(sql).all(...params) as QueryResult[];
+}
+
+/**
+ * Fetches a window of chunks around a target chunk within the same session.
+ * Orders all session chunks by created_at + chunk_index, finds the target,
+ * and returns `window` chunks before and after it.
+ */
+export function getSessionContext(
+  db: Database,
+  sessionId: string,
+  chunkId: string,
+  windowSize = 1,
+): QueryResult[] {
+  // Get all chunks for the session, ordered chronologically
+  const allChunks = db.prepare(`
+    SELECT chunk_id, content, url, section, heading_hierarchy,
+           chunk_index, total_chunks, created_at
+    FROM vec_items
+    WHERE session_id = ?
+    ORDER BY created_at, chunk_index
+  `).all(sessionId) as QueryResult[];
+
+  const targetIdx = allChunks.findIndex((c) => c.chunk_id === chunkId);
+  if (targetIdx === -1) return [];
+
+  const start = Math.max(0, targetIdx - windowSize);
+  const end = Math.min(allChunks.length - 1, targetIdx + windowSize);
+  return allChunks.slice(start, end + 1);
 }
 
 /**
@@ -406,11 +585,17 @@ export function getSessionChunksOrdered(db: Database, sessionId: string): ChunkR
  * Returns the number of chunks deleted.
  */
 export function deleteSession(db: Database, sessionId: string): number {
+  const selectChunkIds = db.prepare("SELECT chunk_id FROM vec_items WHERE session_id = ?");
   const deleteChunks = db.prepare("DELETE FROM vec_items WHERE session_id = ?");
+  const deleteFts    = db.prepare("DELETE FROM chunks_fts WHERE chunk_id = ?");
   const deleteMeta   = db.prepare("DELETE FROM sessions_meta WHERE session_id = ?");
 
   let chunkCount = 0;
   db.transaction(() => {
+    const chunkIds = selectChunkIds.all(sessionId) as Array<{ chunk_id: string }>;
+    for (const { chunk_id } of chunkIds) {
+      deleteFts.run(chunk_id);
+    }
     const result = deleteChunks.run(sessionId);
     chunkCount = result.changes;
     deleteMeta.run(sessionId);
@@ -430,12 +615,18 @@ export function deleteSessionsOlderThan(
   const candidates = listSessions(db, { toDate: olderThanMs });
   if (candidates.length === 0) return { sessions: 0, chunks: 0 };
 
+  const selectChunkIds = db.prepare("SELECT chunk_id FROM vec_items WHERE session_id = ?");
   const deleteChunks = db.prepare("DELETE FROM vec_items WHERE session_id = ?");
+  const deleteFts    = db.prepare("DELETE FROM chunks_fts WHERE chunk_id = ?");
   const deleteMeta   = db.prepare("DELETE FROM sessions_meta WHERE session_id = ?");
 
   let totalChunks = 0;
   db.transaction(() => {
     for (const s of candidates) {
+      const chunkIds = selectChunkIds.all(s.session_id) as Array<{ chunk_id: string }>;
+      for (const { chunk_id } of chunkIds) {
+        deleteFts.run(chunk_id);
+      }
       const result = deleteChunks.run(s.session_id);
       totalChunks += result.changes;
       deleteMeta.run(s.session_id);

@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { useParams, useNavigate } from "react-router-dom";
+import { useState, useEffect } from "react";
+import { useParams, useNavigate, useLocation } from "react-router-dom";
 import SessionDetail from "../components/SessionDetail";
 import ConfirmDialog from "../components/ConfirmDialog";
 import { useSessionDetail } from "../hooks/useSessionDetail";
@@ -7,8 +7,25 @@ import { useSessionDetail } from "../hooks/useSessionDetail";
 export default function SessionDetailPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
+  const location = useLocation();
   const { session, chunks, loading, error, deleteSession } = useSessionDetail(id || "");
   const [showDelete, setShowDelete] = useState(false);
+  const [highlightedChunkId, setHighlightedChunkId] = useState<string | null>(null);
+
+  // Scroll to chunk when hash is present and chunks have loaded
+  useEffect(() => {
+    if (!loading && chunks.length > 0 && location.hash) {
+      const chunkId = location.hash.slice(1); // remove '#'
+      setHighlightedChunkId(chunkId.replace("chunk-", ""));
+      // Small delay to ensure DOM has rendered
+      requestAnimationFrame(() => {
+        const el = document.getElementById(chunkId);
+        if (el) {
+          el.scrollIntoView({ behavior: "smooth", block: "center" });
+        }
+      });
+    }
+  }, [loading, chunks.length, location.hash]);
 
   if (loading) {
     return (
@@ -58,6 +75,7 @@ export default function SessionDetailPage() {
         session={session}
         chunks={chunks}
         onDelete={() => setShowDelete(true)}
+        highlightedChunkId={highlightedChunkId}
       />
 
       <ConfirmDialog

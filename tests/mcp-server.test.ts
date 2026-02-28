@@ -127,6 +127,7 @@ describe("createToolHandlers", () => {
     return createToolHandlers({
       createEmbedding: mockEmbedding,
       querySessions: vi.fn().mockResolvedValue(queryResults),
+      querySessionsHybrid: vi.fn().mockResolvedValue(queryResults),
       getSessionChunks: vi.fn().mockResolvedValue(chunkResults),
     });
   };
@@ -161,6 +162,7 @@ describe("createToolHandlers", () => {
       const handlers = createToolHandlers({
         createEmbedding: mockEmbedding,
         querySessions,
+        querySessionsHybrid: vi.fn().mockResolvedValue([]),
         getSessionChunks: vi.fn().mockResolvedValue([]),
       });
       await handlers.querySessionsHandler({
@@ -182,6 +184,7 @@ describe("createToolHandlers", () => {
       const handlers = createToolHandlers({
         createEmbedding: mockEmbedding,
         querySessions,
+        querySessionsHybrid: vi.fn().mockResolvedValue([]),
         getSessionChunks: vi.fn().mockResolvedValue([]),
       });
       await handlers.querySessionsHandler({
@@ -203,6 +206,7 @@ describe("createToolHandlers", () => {
       const handlers = createToolHandlers({
         createEmbedding: mockEmbedding,
         querySessions,
+        querySessionsHybrid: vi.fn().mockResolvedValue([]),
         getSessionChunks: vi.fn().mockResolvedValue([]),
       });
       const fromMs = new Date("2026-02-01").getTime();
@@ -222,11 +226,40 @@ describe("createToolHandlers", () => {
       const handlers = createToolHandlers({
         createEmbedding: vi.fn().mockRejectedValue(new Error("API down")),
         querySessions: vi.fn(),
+        querySessionsHybrid: vi.fn(),
         getSessionChunks: vi.fn(),
       });
       const result = await handlers.querySessionsHandler({ queryText: "test" });
       expect(result.content[0].text).toContain("Error");
       expect(result.content[0].text).toContain("API down");
+    });
+
+    it("uses querySessions when hybrid is false", async () => {
+      const querySessions = vi.fn().mockResolvedValue([]);
+      const querySessionsHybrid = vi.fn().mockResolvedValue([]);
+      const handlers = createToolHandlers({
+        createEmbedding: mockEmbedding,
+        querySessions,
+        querySessionsHybrid,
+        getSessionChunks: vi.fn().mockResolvedValue([]),
+      });
+      await handlers.querySessionsHandler({ queryText: "test", hybrid: false });
+      expect(querySessions).toHaveBeenCalled();
+      expect(querySessionsHybrid).not.toHaveBeenCalled();
+    });
+
+    it("uses querySessionsHybrid when hybrid is true", async () => {
+      const querySessions = vi.fn().mockResolvedValue([]);
+      const querySessionsHybrid = vi.fn().mockResolvedValue([]);
+      const handlers = createToolHandlers({
+        createEmbedding: mockEmbedding,
+        querySessions,
+        querySessionsHybrid,
+        getSessionChunks: vi.fn().mockResolvedValue([]),
+      });
+      await handlers.querySessionsHandler({ queryText: "test", hybrid: true });
+      expect(querySessionsHybrid).toHaveBeenCalled();
+      expect(querySessions).not.toHaveBeenCalled();
     });
   });
 
@@ -257,6 +290,7 @@ describe("createToolHandlers", () => {
       const handlers = createToolHandlers({
         createEmbedding: mockEmbedding,
         querySessions: vi.fn().mockResolvedValue([]),
+        querySessionsHybrid: vi.fn().mockResolvedValue([]),
         getSessionChunks,
       });
       await handlers.getSessionChunksHandler({
@@ -275,6 +309,7 @@ describe("createToolHandlers", () => {
       const handlers = createToolHandlers({
         createEmbedding: mockEmbedding,
         querySessions: vi.fn(),
+        querySessionsHybrid: vi.fn(),
         getSessionChunks: vi.fn().mockRejectedValue(new Error("DB error")),
       });
       const result = await handlers.getSessionChunksHandler({

@@ -13,6 +13,8 @@ export function useSearch() {
     limit?: number;
     fromDate?: string;
     toDate?: string;
+    sectionFilter?: string;
+    hybrid?: boolean;
   }) {
     setLoading(true);
     setError(null);

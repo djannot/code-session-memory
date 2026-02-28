@@ -17,9 +17,10 @@ interface SessionDetailProps {
   session: SessionRow;
   chunks: ChunkRow[];
   onDelete: () => void;
+  highlightedChunkId?: string | null;
 }
 
-export default function SessionDetail({ session, chunks, onDelete }: SessionDetailProps) {
+export default function SessionDetail({ session, chunks, onDelete, highlightedChunkId }: SessionDetailProps) {
   return (
     <div>
       {/* Header */}
@@ -53,7 +54,7 @@ export default function SessionDetail({ session, chunks, onDelete }: SessionDeta
       {/* Chunks */}
       <div className="space-y-3">
         {chunks.map((chunk, i) => (
-          <ChunkView key={chunk.chunk_id} chunk={chunk} index={i} total={chunks.length} />
+          <ChunkView key={chunk.chunk_id} chunk={chunk} index={i} total={chunks.length} highlighted={chunk.chunk_id === highlightedChunkId} />
         ))}
       </div>
     </div>

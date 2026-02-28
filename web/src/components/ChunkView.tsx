@@ -1,3 +1,4 @@
+import { useEffect, useRef, useState } from "react";
 import type { ChunkRow } from "../api/client";
 import MarkdownContent from "./MarkdownContent";
 
@@ -35,14 +36,31 @@ interface ChunkViewProps {
   chunk: ChunkRow;
   index: number;
   total: number;
+  highlighted?: boolean;
 }
 
-export default function ChunkView({ chunk, index, total }: ChunkViewProps) {
+export default function ChunkView({ chunk, index, total, highlighted }: ChunkViewProps) {
   const role = getRoleStyle(chunk.section);
   const bgTint = role?.bg ?? "";
+  const ref = useRef<HTMLDivElement>(null);
+  const [pulse, setPulse] = useState(highlighted ?? false);
+
+  useEffect(() => {
+    if (highlighted) {
+      setPulse(true);
+      const timer = setTimeout(() => setPulse(false), 2000);
+      return () => clearTimeout(timer);
+    }
+  }, [highlighted]);
 
   return (
-    <div className={`glass rounded-xl overflow-hidden shadow-sm ${bgTint}`}>
+    <div
+      id={`chunk-${chunk.chunk_id}`}
+      ref={ref}
+      className={`glass rounded-xl overflow-hidden shadow-sm ${bgTint} ${
+        pulse ? "ring-2 ring-violet-400 animate-pulse" : ""
+      } transition-all`}
+    >
       <div className="flex items-center justify-between px-4 py-2 border-b border-white/20">
         <div className="flex items-center gap-3">
           <span className="text-xs font-mono text-gray-400">

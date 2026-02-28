@@ -15,7 +15,7 @@
  * Requires OPENAI_API_KEY environment variable for embedding generation.
  */
 
-import { resolveDbPath, openDatabase, queryByEmbedding } from "./database";
+import { resolveDbPath, openDatabase, queryByEmbedding, queryHybrid } from "./database";
 import { createEmbedder } from "./embedder";
 import type { SessionSource, QueryResult } from "./types";
 
@@ -38,6 +38,7 @@ interface QueryOptions {
   limit: number;
   fromMs?: number;
   toMs?: number;
+  hybrid?: boolean;
 }
 
 /**
@@ -51,11 +52,14 @@ export function parseQueryArgs(args: string[]): QueryOptions {
   let limit = 5;
   let fromMs: number | undefined;
   let toMs: number | undefined;
+  let hybrid = false;
 
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
 
-    if (arg === "--source") {
+    if (arg === "--hybrid") {
+      hybrid = true;
+    } else if (arg === "--source") {
       const val = args[++i];
       if (!val) throw new Error("--source requires a value (opencode, claude-code, cursor, vscode, codex, gemini-cli)");
       if (
@@ -99,7 +103,7 @@ export function parseQueryArgs(args: string[]): QueryOptions {
     throw new Error('Query text is required. Usage: code-session-memory query "your question here"');
   }
 
-  return { queryText, source, limit, fromMs, toMs };
+  return { queryText, source, limit, fromMs, toMs, hybrid };
 }
 
 /**
@@ -201,15 +205,26 @@ export async function cmdQuery(args: string[]): Promise<void> {
     const embedding = await embedder.embedText(opts.queryText);
 
     // 5. Search
-    const results = queryByEmbedding(
-      db,
-      embedding,
-      opts.limit,
-      undefined, // no project filter
-      opts.source,
-      opts.fromMs,
-      opts.toMs,
-    );
+    const results = opts.hybrid
+      ? queryHybrid(
+          db,
+          embedding,
+          opts.queryText,
+          opts.limit,
+          undefined, // no project filter
+          opts.source,
+          opts.fromMs,
+          opts.toMs,
+        )
+      : queryByEmbedding(
+          db,
+          embedding,
+          opts.limit,
+          undefined, // no project filter
+          opts.source,
+          opts.fromMs,
+          opts.toMs,
+        );
 
     // 6. Print results
     if (results.length === 0) {
@@ -222,6 +237,7 @@ export async function cmdQuery(args: string[]): Promise<void> {
     }
 
     const filterDesc = [
+      opts.hybrid ? "hybrid" : "semantic",
       opts.source ? `source=${opts.source}` : null,
       opts.fromMs ? `from=${new Date(opts.fromMs).toISOString().slice(0, 10)}` : null,
       opts.toMs   ? `to=${new Date(opts.toMs + 1).toISOString().slice(0, 10)}` : null,

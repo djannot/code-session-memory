@@ -144,6 +144,24 @@ describe("parseQueryArgs", () => {
   it("throws when --source has no value", () => {
     expect(() => parseQueryArgs(["auth", "--source"])).toThrow("--source requires a value");
   });
+
+  it("parses --hybrid flag", () => {
+    const opts = parseQueryArgs(["auth", "--hybrid"]);
+    expect(opts.hybrid).toBe(true);
+    expect(opts.queryText).toBe("auth");
+  });
+
+  it("defaults hybrid to false when not specified", () => {
+    const opts = parseQueryArgs(["auth"]);
+    expect(opts.hybrid).toBe(false);
+  });
+
+  it("combines --hybrid with other flags", () => {
+    const opts = parseQueryArgs(["auth", "--hybrid", "--source", "opencode", "--limit", "3"]);
+    expect(opts.hybrid).toBe(true);
+    expect(opts.source).toBe("opencode");
+    expect(opts.limit).toBe(3);
+  });
 });
 
 // ---------------------------------------------------------------------------

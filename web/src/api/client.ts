@@ -65,12 +65,28 @@ export async function searchSessions(params: {
   limit?: number;
   fromDate?: string;
   toDate?: string;
+  sectionFilter?: string;
+  hybrid?: boolean;
 }): Promise<{ results: QueryResult[] }> {
   const res = await fetch(`${BASE}/search`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(params),
   });
+  return handleResponse(res);
+}
+
+export async function getChunkContext(
+  sessionId: string,
+  chunkId: string,
+  window = 1,
+): Promise<{ chunks: ChunkRow[] }> {
+  const params = new URLSearchParams({
+    sessionId,
+    chunkId,
+    window: String(window),
+  });
+  const res = await fetch(`${BASE}/context?${params}`);
   return handleResponse(res);
 }
 

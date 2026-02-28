@@ -1818,6 +1818,7 @@ ${bold("Usage:")}
   npx code-session-memory uninstall                       Remove all installed components (keeps DB)
   npx code-session-memory reset-db                        Delete all indexed data (keeps installation)
   npx code-session-memory query <text>                    Semantic search across all indexed sessions
+  npx code-session-memory query <text> --hybrid           Use hybrid search (keyword + vector)
   npx code-session-memory query <text> --source <s>       Filter by source (opencode, claude-code, cursor, vscode, codex, gemini-cli)
   npx code-session-memory query <text> --limit <n>        Max results (default: 5)
   npx code-session-memory query <text> --from <date>      Results from date (e.g. 2026-02-01)

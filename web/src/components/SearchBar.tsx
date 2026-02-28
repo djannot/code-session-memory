@@ -1,6 +1,12 @@
 import { useState } from "react";
 
 const SOURCES = ["", "opencode", "claude-code", "cursor", "vscode", "codex", "gemini-cli"];
+const SECTION_OPTIONS = [
+  { value: "", label: "All types" },
+  { value: "user", label: "User" },
+  { value: "assistant", label: "Assistant" },
+  { value: "tool", label: "Tool" },
+];
 
 interface SearchBarProps {
   onSearch: (params: {
@@ -9,6 +15,8 @@ interface SearchBarProps {
     limit?: number;
     fromDate?: string;
     toDate?: string;
+    sectionFilter?: string;
+    hybrid?: boolean;
   }) => void;
   loading: boolean;
 }
@@ -16,6 +24,8 @@ interface SearchBarProps {
 export default function SearchBar({ onSearch, loading }: SearchBarProps) {
   const [query, setQuery] = useState("");
   const [source, setSource] = useState("");
+  const [sectionFilter, setSectionFilter] = useState("");
+  const [hybrid, setHybrid] = useState(false);
   const [limit, setLimit] = useState(10);
   const [fromDate, setFromDate] = useState("");
   const [toDate, setToDate] = useState("");
@@ -30,6 +40,8 @@ export default function SearchBar({ onSearch, loading }: SearchBarProps) {
       limit,
       fromDate: fromDate || undefined,
       toDate: toDate || undefined,
+      sectionFilter: sectionFilter || undefined,
+      hybrid: hybrid || undefined,
     });
   };
 
@@ -89,6 +101,52 @@ export default function SearchBar({ onSearch, loading }: SearchBarProps) {
 
       {showFilters && (
         <div className="flex flex-wrap gap-3 p-3 glass rounded-xl shadow-sm">
+          <div className="flex flex-col gap-1">
+            <label className="text-xs text-gray-500">Type</label>
+            <div className="flex rounded-lg overflow-hidden border border-white/30">
+              {SECTION_OPTIONS.map((opt) => (
+                <button
+                  key={opt.value}
+                  type="button"
+                  onClick={() => setSectionFilter(opt.value)}
+                  className={`px-3 py-1.5 text-xs font-medium transition-all cursor-pointer ${
+                    sectionFilter === opt.value
+                      ? "bg-violet-600 text-white"
+                      : "glass text-gray-600 hover:bg-white/40"
+                  }`}
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="flex flex-col gap-1">
+            <label className="text-xs text-gray-500">Mode</label>
+            <div className="flex rounded-lg overflow-hidden border border-white/30">
+              <button
+                type="button"
+                onClick={() => setHybrid(false)}
+                className={`px-3 py-1.5 text-xs font-medium transition-all cursor-pointer ${
+                  !hybrid
+                    ? "bg-violet-600 text-white"
+                    : "glass text-gray-600 hover:bg-white/40"
+                }`}
+              >
+                Semantic
+              </button>
+              <button
+                type="button"
+                onClick={() => setHybrid(true)}
+                className={`px-3 py-1.5 text-xs font-medium transition-all cursor-pointer ${
+                  hybrid
+                    ? "bg-violet-600 text-white"
+                    : "glass text-gray-600 hover:bg-white/40"
+                }`}
+              >
+                Hybrid
+              </button>
+            </div>
+          </div>
           <div className="flex flex-col gap-1">
             <label className="text-xs text-gray-500">Source</label>
             <select

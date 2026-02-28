@@ -114,6 +114,111 @@ export function createSqliteProvider(deps: {
     });
   }
 
+  // ---- queryKeyword (FTS5) --------------------------------------------------
+
+  function queryKeyword(
+    queryText: string,
+    topK = 10,
+    projectFilter?: string,
+    sourceFilter?: string,
+    fromMs?: number,
+    toMs?: number,
+  ): QueryResult[] {
+    return withDb((db) => {
+      const sanitized = queryText.replace(/['"*(){}[\]:^~!\\]/g, " ").trim();
+      if (!sanitized) return [];
+
+      let sql = `
+        SELECT
+          v.chunk_id, v.content, v.url, v.section, v.heading_hierarchy,
+          v.chunk_index, v.total_chunks, v.session_id, v.session_title, v.project,
+          v.created_at, m.source,
+          bm25(chunks_fts) AS rank
+        FROM chunks_fts f
+        JOIN vec_items v ON f.chunk_id = v.chunk_id
+        LEFT JOIN sessions_meta m ON v.session_id = m.session_id
+        WHERE chunks_fts MATCH ?
+      `;
+      const params: unknown[] = [sanitized];
+
+      if (projectFilter) {
+        sql += " AND v.project = ?";
+        params.push(projectFilter);
+      }
+      if (sourceFilter) {
+        sql += " AND m.source = ?";
+        params.push(sourceFilter);
+      }
+      if (typeof fromMs === "number") {
+        sql += " AND v.created_at >= ?";
+        params.push(BigInt(fromMs));
+      }
+      if (typeof toMs === "number") {
+        sql += " AND v.created_at <= ?";
+        params.push(BigInt(toMs));
+      }
+
+      sql += " ORDER BY rank LIMIT ?";
+      params.push(topK);
+
+      try {
+        const rows = db.prepare(sql).all(...params) as QueryResult[];
+        rows.forEach((r) => {
+          delete (r as unknown as Record<string, unknown>)["embedding"];
+          delete (r as unknown as Record<string, unknown>)["rank"];
+        });
+        return rows;
+      } catch {
+        return [];
+      }
+    });
+  }
+
+  // ---- querySessionsHybrid (vector + keyword RRF) -------------------------
+
+  async function querySessionsHybrid(
+    queryEmbedding: number[],
+    queryText: string,
+    topK = 10,
+    projectFilter?: string,
+    sourceFilter?: string,
+    fromMs?: number,
+    toMs?: number,
+  ): Promise<QueryResult[]> {
+    const overFetch = topK * 3;
+
+    const vectorResults = await querySessions(
+      queryEmbedding, overFetch, projectFilter, sourceFilter, fromMs, toMs,
+    );
+    const keywordResults = queryKeyword(
+      queryText, overFetch, projectFilter, sourceFilter, fromMs, toMs,
+    );
+
+    const K = 60;
+    const scores = new Map<string, { score: number; result: QueryResult }>();
+
+    for (let i = 0; i < vectorResults.length; i++) {
+      const r = vectorResults[i];
+      scores.set(r.chunk_id, { score: 1 / (K + i + 1), result: r });
+    }
+
+    for (let i = 0; i < keywordResults.length; i++) {
+      const r = keywordResults[i];
+      const rrfScore = 1 / (K + i + 1);
+      const existing = scores.get(r.chunk_id);
+      if (existing) {
+        existing.score += rrfScore;
+      } else {
+        scores.set(r.chunk_id, { score: rrfScore, result: r });
+      }
+    }
+
+    return Array.from(scores.values())
+      .sort((a, b) => b.score - a.score)
+      .slice(0, topK)
+      .map((entry) => entry.result);
+  }
+
   // ---- get_session_chunks ---------------------------------------------------
 
   async function getSessionChunks(
@@ -143,7 +248,7 @@ export function createSqliteProvider(deps: {
     });
   }
 
-  return { querySessions, getSessionChunks };
+  return { querySessions, querySessionsHybrid, getSessionChunks };
 }
 
 // ---------------------------------------------------------------------------
@@ -160,13 +265,22 @@ export function createToolHandlers(deps: {
     fromMs?: number,
     toMs?: number,
   ) => Promise<QueryResult[]>;
+  querySessionsHybrid: (
+    embedding: number[],
+    queryText: string,
+    topK: number,
+    project?: string,
+    source?: string,
+    fromMs?: number,
+    toMs?: number,
+  ) => Promise<QueryResult[]>;
   getSessionChunks: (
     url: string,
     startIndex?: number,
     endIndex?: number,
   ) => Promise<QueryResult[]>;
 }) {
-  const { createEmbedding, querySessions, getSessionChunks } = deps;
+  const { createEmbedding, querySessions, querySessionsHybrid, getSessionChunks } = deps;
 
   // ---- query_sessions handler -----------------------------------------------
 
@@ -177,15 +291,19 @@ export function createToolHandlers(deps: {
     limit?: number;
     fromMs?: number;
     toMs?: number;
+    hybrid?: boolean;
   }) => {
     const limit = args.limit ?? 5;
+    const useHybrid = args.hybrid === true;
     console.error(
-      `[query_sessions] text="${args.queryText}" project="${args.project ?? "any"}" source="${args.source ?? "any"}" limit=${limit}`,
+      `[query_sessions] text="${args.queryText}" project="${args.project ?? "any"}" source="${args.source ?? "any"}" limit=${limit} hybrid=${useHybrid}`,
     );
 
     try {
       const embedding = await createEmbedding(args.queryText);
-      const results = await querySessions(embedding, limit, args.project, args.source, args.fromMs, args.toMs);
+      const results = useHybrid
+        ? await querySessionsHybrid(embedding, args.queryText, limit, args.project, args.source, args.fromMs, args.toMs)
+        : await querySessions(embedding, limit, args.project, args.source, args.fromMs, args.toMs);
 
       if (results.length === 0) {
         return {

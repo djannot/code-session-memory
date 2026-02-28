@@ -7,9 +7,13 @@ import {
   upsertSessionMeta,
   insertChunks,
   queryByEmbedding,
+  queryByKeyword,
+  queryHybrid,
   getChunksByUrl,
+  getSessionContext,
   listSessionUrls,
   getSessionChunksOrdered,
+  deleteSession,
   resolveDbPath,
 } from "../src/database";
 import type { DocumentChunk, SessionMeta } from "../src/types";
@@ -438,5 +442,333 @@ describe("getSessionChunksOrdered", () => {
   it("returns empty array for unknown session", () => {
     const db = createTestDb();
     expect(getSessionChunksOrdered(db as Parameters<typeof getSessionChunksOrdered>[0], "ses_unknown")).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// initSchema — FTS5
+// ---------------------------------------------------------------------------
+
+describe("initSchema — FTS5", () => {
+  it("creates chunks_fts virtual table", () => {
+    const db = createTestDb();
+    const tables = (db as unknown as { prepare: (s: string) => { all: () => Array<{ name: string }> } })
+      .prepare("SELECT name FROM sqlite_master WHERE type='table'")
+      .all()
+      .map((r: { name: string }) => r.name);
+    expect(tables).toContain("chunks_fts");
+  });
+
+  it("backfills FTS from vec_items on schema init", () => {
+    // Create DB, insert chunks, then re-init schema to trigger backfill
+    const raw = new Database(":memory:");
+    (sqliteVec as unknown as { load: (db: unknown) => void }).load(raw);
+    const db = raw as unknown as Parameters<typeof initSchema>[0];
+    initSchema(db, EMBEDDING_DIM);
+
+    // Insert a chunk
+    insertChunks(db, [makeChunk({ chunk_id: "bf1", section: "User" })], [makeEmbedding()]);
+
+    // Verify FTS has the row (inserted during insertChunks)
+    const ftsCount = (db as unknown as { prepare: (s: string) => { get: () => { cnt: number } } })
+      .prepare("SELECT COUNT(*) AS cnt FROM chunks_fts").get().cnt;
+    expect(ftsCount).toBe(1);
+  });
+
+  it("insertChunks writes to both vec_items and chunks_fts", () => {
+    const db = createTestDb();
+    insertChunks(db, [
+      makeChunk({ chunk_id: "fts1", section: "User" }),
+      makeChunk({ chunk_id: "fts2", section: "Assistant" }),
+    ], [makeEmbedding(), makeEmbedding()]);
+
+    const ftsCount = (db as unknown as { prepare: (s: string) => { get: () => { cnt: number } } })
+      .prepare("SELECT COUNT(*) AS cnt FROM chunks_fts").get().cnt;
+    expect(ftsCount).toBe(2);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// queryByEmbedding — sectionFilter
+// ---------------------------------------------------------------------------
+
+describe("queryByEmbedding — sectionFilter", () => {
+  it("filters results by section", () => {
+    const db = createTestDb();
+    const emb = makeEmbedding();
+
+    // Insert user and assistant chunks with slightly different embeddings
+    insertChunks(db as Parameters<typeof insertChunks>[0], [
+      makeChunk({ chunk_id: "u1", section: "User" }),
+      makeChunk({ chunk_id: "a1", section: "Assistant" }),
+      makeChunk({ chunk_id: "t1", section: "Tool Result" }),
+    ], [emb, emb, emb]);
+
+    // Add session meta so source filter works
+    upsertSessionMeta(db as Parameters<typeof upsertSessionMeta>[0], {
+      session_id: "ses_001",
+      session_title: "Test",
+      project: "/test",
+      source: "opencode",
+      last_indexed_message_id: null,
+      updated_at: Date.now(),
+    });
+
+    const userOnly = queryByEmbedding(
+      db as Parameters<typeof queryByEmbedding>[0],
+      emb, 10, undefined, undefined, undefined, undefined, "user",
+    );
+    expect(userOnly.every((r) => r.section?.toLowerCase().startsWith("user"))).toBe(true);
+    expect(userOnly.length).toBe(1);
+  });
+
+  it("returns all when sectionFilter is omitted", () => {
+    const db = createTestDb();
+    const emb = makeEmbedding();
+
+    insertChunks(db as Parameters<typeof insertChunks>[0], [
+      makeChunk({ chunk_id: "u1", section: "User" }),
+      makeChunk({ chunk_id: "a1", section: "Assistant" }),
+    ], [emb, emb]);
+
+    const all = queryByEmbedding(
+      db as Parameters<typeof queryByEmbedding>[0],
+      emb, 10,
+    );
+    expect(all.length).toBe(2);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// queryByKeyword — FTS5 keyword search
+// ---------------------------------------------------------------------------
+
+describe("queryByKeyword", () => {
+  it("finds chunks by keyword match", () => {
+    const db = createTestDb();
+    insertChunks(db as Parameters<typeof insertChunks>[0], [
+      makeChunk({ chunk_id: "k1", section: "User" }),
+      makeChunk({ chunk_id: "k2", section: "Assistant" }),
+    ], [makeEmbedding(), makeEmbedding()]);
+
+    // The default content is "Some content here"
+    const results = queryByKeyword(
+      db as Parameters<typeof queryByKeyword>[0],
+      "content",
+      10,
+    );
+    expect(results.length).toBeGreaterThan(0);
+  });
+
+  it("returns empty for non-matching query", () => {
+    const db = createTestDb();
+    insertChunks(db as Parameters<typeof insertChunks>[0], [
+      makeChunk({ chunk_id: "k1" }),
+    ], [makeEmbedding()]);
+
+    const results = queryByKeyword(
+      db as Parameters<typeof queryByKeyword>[0],
+      "xyznonexistent",
+      10,
+    );
+    expect(results.length).toBe(0);
+  });
+
+  it("returns empty for empty sanitized query", () => {
+    const db = createTestDb();
+    const results = queryByKeyword(
+      db as Parameters<typeof queryByKeyword>[0],
+      "***",
+      10,
+    );
+    expect(results.length).toBe(0);
+  });
+
+  it("filters by section", () => {
+    const db = createTestDb();
+    insertChunks(db as Parameters<typeof insertChunks>[0], [
+      makeChunk({ chunk_id: "k1", section: "User" }),
+      makeChunk({ chunk_id: "k2", section: "Assistant" }),
+    ], [makeEmbedding(), makeEmbedding()]);
+
+    const results = queryByKeyword(
+      db as Parameters<typeof queryByKeyword>[0],
+      "content",
+      10,
+      undefined, undefined, undefined, undefined,
+      "user",
+    );
+    expect(results.length).toBe(1);
+    expect(results[0].section?.toLowerCase()).toContain("user");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// queryHybrid — RRF merge
+// ---------------------------------------------------------------------------
+
+describe("queryHybrid", () => {
+  it("returns results combining vector and keyword search", () => {
+    const db = createTestDb();
+    const emb = makeEmbedding();
+
+    insertChunks(db as Parameters<typeof insertChunks>[0], [
+      makeChunk({ chunk_id: "h1", section: "User" }),
+      makeChunk({ chunk_id: "h2", section: "Assistant" }),
+    ], [emb, emb]);
+
+    const results = queryHybrid(
+      db as Parameters<typeof queryHybrid>[0],
+      emb,
+      "content",
+      10,
+    );
+    expect(results.length).toBeGreaterThan(0);
+  });
+
+  it("respects topK limit", () => {
+    const db = createTestDb();
+    const emb = makeEmbedding();
+
+    const chunks = Array.from({ length: 5 }, (_, i) =>
+      makeChunk({ chunk_id: `h${i}` }),
+    );
+    insertChunks(db as Parameters<typeof insertChunks>[0], chunks, chunks.map(() => emb));
+
+    const results = queryHybrid(
+      db as Parameters<typeof queryHybrid>[0],
+      emb,
+      "content",
+      2,
+    );
+    expect(results.length).toBe(2);
+  });
+
+  it("deduplicates chunks appearing in both vector and keyword results", () => {
+    const db = createTestDb();
+    const emb = makeEmbedding();
+
+    insertChunks(db as Parameters<typeof insertChunks>[0], [
+      makeChunk({ chunk_id: "dup1" }),
+    ], [emb]);
+
+    const results = queryHybrid(
+      db as Parameters<typeof queryHybrid>[0],
+      emb,
+      "content",
+      10,
+    );
+    // Should not have duplicate chunk_ids
+    const ids = results.map((r) => r.chunk_id);
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// getSessionContext
+// ---------------------------------------------------------------------------
+
+describe("getSessionContext", () => {
+  it("returns window of chunks around target within session", () => {
+    const db = createTestDb();
+    // Insert 5 chunks in a session with increasing created_at
+    const chunks = Array.from({ length: 5 }, (_, i) =>
+      makeChunk({
+        chunk_id: `ctx${i}`,
+        session_id: "ses_ctx",
+        url: `session://ses_ctx#msg_${i}`,
+        chunk_index: 0,
+        total_chunks: 1,
+      }),
+    );
+    // Manually set different created_at by inserting one at a time
+    for (let i = 0; i < chunks.length; i++) {
+      insertChunks(db as Parameters<typeof insertChunks>[0], [chunks[i]], [makeEmbedding()]);
+    }
+
+    const results = getSessionContext(
+      db as Parameters<typeof getSessionContext>[0],
+      "ses_ctx",
+      "ctx2",
+      1,
+    );
+    // Should return ctx1, ctx2, ctx3 (window=1 around ctx2)
+    expect(results.length).toBe(3);
+    expect(results.map((r) => r.chunk_id)).toEqual(["ctx1", "ctx2", "ctx3"]);
+  });
+
+  it("returns fewer chunks at session boundary", () => {
+    const db = createTestDb();
+    const chunks = Array.from({ length: 3 }, (_, i) =>
+      makeChunk({
+        chunk_id: `edge${i}`,
+        session_id: "ses_edge",
+        url: `session://ses_edge#msg_${i}`,
+        chunk_index: 0,
+        total_chunks: 1,
+      }),
+    );
+    for (const chunk of chunks) {
+      insertChunks(db as Parameters<typeof insertChunks>[0], [chunk], [makeEmbedding()]);
+    }
+
+    // Request context around the first chunk
+    const results = getSessionContext(
+      db as Parameters<typeof getSessionContext>[0],
+      "ses_edge",
+      "edge0",
+      1,
+    );
+    // Should return edge0, edge1 (no chunk before edge0)
+    expect(results.length).toBe(2);
+    expect(results[0].chunk_id).toBe("edge0");
+  });
+
+  it("returns empty for unknown chunk_id", () => {
+    const db = createTestDb();
+    const results = getSessionContext(
+      db as Parameters<typeof getSessionContext>[0],
+      "ses_001",
+      "nonexistent",
+      1,
+    );
+    expect(results).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// deleteSession — FTS cleanup
+// ---------------------------------------------------------------------------
+
+describe("deleteSession — FTS cleanup", () => {
+  it("removes chunks from both vec_items and chunks_fts", () => {
+    const db = createTestDb();
+    upsertSessionMeta(db as Parameters<typeof upsertSessionMeta>[0], {
+      session_id: "ses_del",
+      session_title: "Delete me",
+      project: "/test",
+      source: "opencode",
+      last_indexed_message_id: null,
+      updated_at: Date.now(),
+    });
+
+    insertChunks(db as Parameters<typeof insertChunks>[0], [
+      makeChunk({ chunk_id: "del1", session_id: "ses_del" }),
+      makeChunk({ chunk_id: "del2", session_id: "ses_del" }),
+    ], [makeEmbedding(), makeEmbedding()]);
+
+    // Verify inserted
+    const ftsBeforeRaw = (db as unknown as { prepare: (s: string) => { get: (...a: unknown[]) => { cnt: number } } })
+      .prepare("SELECT COUNT(*) AS cnt FROM chunks_fts WHERE chunk_id IN ('del1','del2')").get();
+    expect(ftsBeforeRaw.cnt).toBe(2);
+
+    // Delete
+    const deleted = deleteSession(db as Parameters<typeof deleteSession>[0], "ses_del");
+    expect(deleted).toBe(2);
+
+    // Verify FTS cleaned
+    const ftsAfterRaw = (db as unknown as { prepare: (s: string) => { get: (...a: unknown[]) => { cnt: number } } })
+      .prepare("SELECT COUNT(*) AS cnt FROM chunks_fts WHERE chunk_id IN ('del1','del2')").get();
+    expect(ftsAfterRaw.cnt).toBe(0);
   });
 });

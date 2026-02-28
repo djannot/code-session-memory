@@ -10,6 +10,9 @@ import {
   resolveDbPath,
   openDatabase,
   queryByEmbedding,
+  queryHybrid,
+  getChunksByUrl,
+  getSessionContext,
   listSessions,
   getSessionChunksOrdered,
   deleteSession,
@@ -55,6 +58,8 @@ const VALID_SOURCES = new Set<string>([
   "opencode", "claude-code", "cursor", "vscode", "codex", "gemini-cli",
 ]);
 
+const VALID_SECTIONS = new Set<string>(["user", "assistant", "tool"]);
+
 // ---------------------------------------------------------------------------
 // Routes
 // ---------------------------------------------------------------------------
@@ -62,10 +67,10 @@ const VALID_SOURCES = new Set<string>([
 export function createApiRouter(): Router {
   const router = Router();
 
-  // POST /api/search — semantic search
+  // POST /api/search — hybrid semantic + keyword search
   router.post("/search", async (req: Request, res: Response) => {
     try {
-      const { queryText, source, limit, fromDate, toDate } = req.body;
+      const { queryText, source, limit, fromDate, toDate, sectionFilter: rawSection, hybrid } = req.body;
 
       if (!queryText || typeof queryText !== "string") {
         res.status(400).json({ error: "queryText is required" });
@@ -78,6 +83,7 @@ export function createApiRouter(): Router {
       }
 
       const sourceFilter = source && VALID_SOURCES.has(source) ? source as SessionSource : undefined;
+      const sectionFilter = rawSection && VALID_SECTIONS.has(rawSection) ? rawSection as string : undefined;
       const topK = typeof limit === "number" && limit > 0 ? Math.min(limit, 50) : 5;
 
       let fromMs: number | undefined;
@@ -92,11 +98,54 @@ export function createApiRouter(): Router {
       const embedder = createEmbedder();
       const embedding = await embedder.embedText(queryText);
 
+      const useHybrid = hybrid === true;
       const results = withDb((db) =>
-        queryByEmbedding(db, embedding, topK, undefined, sourceFilter, fromMs, toMs)
+        useHybrid
+          ? queryHybrid(db, embedding, queryText, topK, undefined, sourceFilter, fromMs, toMs, sectionFilter)
+          : queryByEmbedding(db, embedding, topK, undefined, sourceFilter, fromMs, toMs, sectionFilter)
       );
 
       res.json({ results });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      res.status(500).json({ error: message });
+    }
+  });
+
+  // GET /api/chunks — fetch chunks by URL with optional index range (for context preview)
+  router.get("/chunks", (req: Request, res: Response) => {
+    try {
+      const url = typeof req.query.url === "string" ? req.query.url : "";
+      if (!url) {
+        res.status(400).json({ error: "url query parameter is required" });
+        return;
+      }
+
+      const startIndex = typeof req.query.startIndex === "string" ? parseInt(req.query.startIndex, 10) : undefined;
+      const endIndex = typeof req.query.endIndex === "string" ? parseInt(req.query.endIndex, 10) : undefined;
+
+      const chunks = withDb((db) => getChunksByUrl(db, url, startIndex, endIndex));
+      res.json({ chunks });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      res.status(500).json({ error: message });
+    }
+  });
+
+  // GET /api/context — fetch session-level context around a specific chunk
+  router.get("/context", (req: Request, res: Response) => {
+    try {
+      const sessionId = typeof req.query.sessionId === "string" ? req.query.sessionId : "";
+      const chunkId = typeof req.query.chunkId === "string" ? req.query.chunkId : "";
+      if (!sessionId || !chunkId) {
+        res.status(400).json({ error: "sessionId and chunkId query parameters are required" });
+        return;
+      }
+
+      const windowSize = typeof req.query.window === "string" ? parseInt(req.query.window, 10) : 1;
+
+      const chunks = withDb((db) => getSessionContext(db, sessionId, chunkId, windowSize));
+      res.json({ chunks });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       res.status(500).json({ error: message });
