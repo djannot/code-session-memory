@@ -119,6 +119,15 @@ export async function deleteSessionById(id: string): Promise<{ deleted: number }
   return handleResponse(res);
 }
 
+export async function bulkDeleteSessions(ids: string[]): Promise<{ deleted: number }> {
+  const res = await fetch(`${BASE}/sessions/bulk-delete`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ids }),
+  });
+  return handleResponse(res);
+}
+
 export async function purgeOldSessions(days: number): Promise<{ sessions: number; chunks: number }> {
   const res = await fetch(`${BASE}/sessions/purge`, {
     method: "POST",

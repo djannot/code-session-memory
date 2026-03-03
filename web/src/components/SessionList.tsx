@@ -1,3 +1,4 @@
+import { useRef, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import type { SessionRow } from "../api/client";
 import SourceBadge from "./SourceBadge";
@@ -22,10 +23,36 @@ function formatProject(project: string): string {
 interface SessionListProps {
   sessions: SessionRow[];
   onDelete?: (id: string) => void;
+  selected?: Set<string>;
+  onToggle?: (id: string) => void;
+  onToggleAll?: () => void;
 }
 
-export default function SessionList({ sessions, onDelete }: SessionListProps) {
+function SelectAllCheckbox({ sessions, selected, onToggleAll }: { sessions: SessionRow[]; selected: Set<string>; onToggleAll: () => void }) {
+  const ref = useRef<HTMLInputElement>(null);
+  const allSelected = sessions.length > 0 && sessions.every((s) => selected.has(s.session_id));
+  const someSelected = sessions.some((s) => selected.has(s.session_id));
+
+  useEffect(() => {
+    if (ref.current) {
+      ref.current.indeterminate = someSelected && !allSelected;
+    }
+  }, [someSelected, allSelected]);
+
+  return (
+    <input
+      ref={ref}
+      type="checkbox"
+      checked={allSelected}
+      onChange={onToggleAll}
+      className="w-4 h-4 rounded border-gray-300 text-violet-500 focus:ring-violet-400/50 cursor-pointer"
+    />
+  );
+}
+
+export default function SessionList({ sessions, onDelete, selected, onToggle, onToggleAll }: SessionListProps) {
   const navigate = useNavigate();
+  const hasSelection = selected !== undefined && onToggle !== undefined;
 
   if (sessions.length === 0) {
     return (
@@ -40,6 +67,11 @@ export default function SessionList({ sessions, onDelete }: SessionListProps) {
       <table className="w-full text-sm">
         <thead>
           <tr className="border-b border-white/20">
+            {hasSelection && onToggleAll && (
+              <th className="w-10 px-3 py-3">
+                <SelectAllCheckbox sessions={sessions} selected={selected} onToggleAll={onToggleAll} />
+              </th>
+            )}
             <th className="text-left px-4 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">Title</th>
             <th className="text-left px-4 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider">Source</th>
             <th className="text-left px-4 py-3 text-xs font-medium text-gray-500 uppercase tracking-wider hidden md:table-cell">Project</th>
@@ -53,8 +85,19 @@ export default function SessionList({ sessions, onDelete }: SessionListProps) {
             <tr
               key={s.session_id}
               onClick={() => navigate(`/sessions/${encodeURIComponent(s.session_id)}`)}
-              className="hover:bg-white/30 cursor-pointer transition-colors"
+              className={`hover:bg-white/30 cursor-pointer transition-colors ${hasSelection && selected.has(s.session_id) ? "bg-violet-50/40" : ""}`}
             >
+              {hasSelection && (
+                <td className="px-3 py-3">
+                  <input
+                    type="checkbox"
+                    checked={selected.has(s.session_id)}
+                    onChange={() => onToggle(s.session_id)}
+                    onClick={(e) => e.stopPropagation()}
+                    className="w-4 h-4 rounded border-gray-300 text-violet-500 focus:ring-violet-400/50 cursor-pointer"
+                  />
+                </td>
+              )}
               <td className="px-4 py-3 text-gray-800 truncate max-w-xs">
                 {s.session_title || <span className="text-gray-400">(untitled)</span>}
               </td>

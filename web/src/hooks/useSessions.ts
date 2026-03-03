@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
-import { getSessions, deleteSessionById, purgeOldSessions, type SessionRow } from "../api/client";
+import { getSessions, deleteSessionById, bulkDeleteSessions, purgeOldSessions, type SessionRow } from "../api/client";
 
 export function useSessions() {
   const [sessions, setSessions] = useState<SessionRow[]>([]);
@@ -29,11 +29,17 @@ export function useSessions() {
     setSessions((prev) => prev.filter((s) => s.session_id !== id));
   }
 
+  async function bulkDelete(ids: string[]) {
+    const result = await bulkDeleteSessions(ids);
+    setSessions((prev) => prev.filter((s) => !ids.includes(s.session_id)));
+    return result.deleted;
+  }
+
   async function purgeSessions(days: number) {
     const result = await purgeOldSessions(days);
     await fetchSessions();
     return result;
   }
 
-  return { sessions, loading, error, filters, setFilters, deleteSession, purgeSessions, refresh: fetchSessions };
+  return { sessions, loading, error, filters, setFilters, deleteSession, bulkDelete, purgeSessions, refresh: fetchSessions };
 }

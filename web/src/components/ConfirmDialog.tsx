@@ -3,6 +3,7 @@ interface ConfirmDialogProps {
   title: string;
   message: string;
   confirmLabel?: string;
+  loading?: boolean;
   onConfirm: () => void;
   onCancel: () => void;
 }
@@ -12,6 +13,7 @@ export default function ConfirmDialog({
   title,
   message,
   confirmLabel = "Confirm",
+  loading = false,
   onConfirm,
   onCancel,
 }: ConfirmDialogProps) {
@@ -25,15 +27,23 @@ export default function ConfirmDialog({
         <div className="flex justify-end gap-3">
           <button
             onClick={onCancel}
-            className="px-4 py-2 text-sm rounded-lg glass text-gray-700 hover:bg-white/70 transition-all cursor-pointer"
+            disabled={loading}
+            className="px-4 py-2 text-sm rounded-lg glass text-gray-700 hover:bg-white/70 transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
           >
             Cancel
           </button>
           <button
             onClick={onConfirm}
-            className="px-4 py-2 text-sm rounded-lg bg-red-600 text-white hover:bg-red-500 transition-colors cursor-pointer shadow-md shadow-red-600/25"
+            disabled={loading}
+            className="px-4 py-2 text-sm rounded-lg bg-red-600 text-white hover:bg-red-500 transition-colors cursor-pointer shadow-md shadow-red-600/25 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
           >
-            {confirmLabel}
+            {loading && (
+              <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+              </svg>
+            )}
+            {loading ? "Deleting..." : confirmLabel}
           </button>
         </div>
       </div>

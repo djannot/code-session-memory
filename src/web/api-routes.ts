@@ -211,6 +211,30 @@ export function createApiRouter(): Router {
     }
   });
 
+  // POST /api/sessions/bulk-delete — delete multiple sessions at once
+  router.post("/sessions/bulk-delete", (req: Request, res: Response) => {
+    try {
+      const { ids } = req.body;
+      if (!Array.isArray(ids) || ids.length === 0 || !ids.every((id: unknown) => typeof id === "string")) {
+        res.status(400).json({ error: "ids must be a non-empty array of strings" });
+        return;
+      }
+
+      const deleted = withDb((db) => {
+        let total = 0;
+        for (const id of ids) {
+          total += deleteSession(db, id);
+        }
+        return total;
+      });
+
+      res.json({ deleted });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      res.status(500).json({ error: message });
+    }
+  });
+
   // POST /api/sessions/purge — purge old sessions
   router.post("/sessions/purge", (req: Request, res: Response) => {
     try {
