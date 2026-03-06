@@ -220,6 +220,20 @@ function parseJsonc(text: string): unknown {
   return JSON.parse(stripped);
 }
 
+/**
+ * Reads a JSON file, returning {} for empty/whitespace-only files.
+ * Throws a descriptive error for non-empty invalid JSON.
+ */
+function readJsonFileOrEmpty(filePath: string, parser: (text: string) => unknown = JSON.parse): Record<string, unknown> {
+  const raw = fs.readFileSync(filePath, "utf8").trim();
+  if (!raw) return {};
+  try {
+    return parser(raw) as Record<string, unknown>;
+  } catch {
+    throw new Error(`Could not parse existing ${filePath} — please check it is valid JSON.`);
+  }
+}
+
 function ensureDir(dir: string): void {
   fs.mkdirSync(dir, { recursive: true });
 }
@@ -258,11 +272,7 @@ function installOpenCodeMcpConfig(mcpServerPath: string): { configPath: string; 
 
   let config: Record<string, unknown> = { $schema: "https://opencode.ai/config.json" };
   if (existed) {
-    try {
-      config = JSON.parse(fs.readFileSync(configPath, "utf8"));
-    } catch {
-      throw new Error(`Could not parse existing ${configPath} — please check it is valid JSON.`);
-    }
+    config = { ...config, ...readJsonFileOrEmpty(configPath) };
   }
 
   if (!config.mcp || typeof config.mcp !== "object") config.mcp = {};
@@ -304,11 +314,7 @@ function installClaudeHook(indexerCliClaudePath: string): { settingsPath: string
 
   let settings: Record<string, unknown> = {};
   if (existed) {
-    try {
-      settings = JSON.parse(fs.readFileSync(settingsPath, "utf8"));
-    } catch {
-      throw new Error(`Could not parse existing ${settingsPath} — please check it is valid JSON.`);
-    }
+    settings = readJsonFileOrEmpty(settingsPath);
   }
 
   if (!settings.hooks || typeof settings.hooks !== "object") settings.hooks = {};
@@ -445,11 +451,7 @@ function installClaudeMcpConfig(mcpServerPath: string): { configPath: string; ex
 
   let config: Record<string, unknown> = {};
   if (existed) {
-    try {
-      config = JSON.parse(fs.readFileSync(configPath, "utf8"));
-    } catch {
-      throw new Error(`Could not parse existing ${configPath} — please check it is valid JSON.`);
-    }
+    config = readJsonFileOrEmpty(configPath);
   }
 
   if (!config.mcpServers || typeof config.mcpServers !== "object") config.mcpServers = {};
@@ -539,11 +541,7 @@ function installCursorHook(indexerCliCursorPath: string): { hooksPath: string; e
 
   let config: { version?: number; hooks?: Record<string, unknown[]> } = {};
   if (existed) {
-    try {
-      config = JSON.parse(fs.readFileSync(hooksPath, "utf8"));
-    } catch {
-      throw new Error(`Could not parse existing ${hooksPath} — please check it is valid JSON.`);
-    }
+    config = readJsonFileOrEmpty(hooksPath) as typeof config;
   }
 
   config.version = config.version ?? 1;
@@ -625,11 +623,7 @@ function installCursorMcpConfig(mcpServerPath: string): { configPath: string; ex
 
   let config: Record<string, unknown> = {};
   if (existed) {
-    try {
-      config = JSON.parse(fs.readFileSync(configPath, "utf8"));
-    } catch {
-      throw new Error(`Could not parse existing ${configPath} — please check it is valid JSON.`);
-    }
+    config = readJsonFileOrEmpty(configPath);
   }
 
   if (!config.mcpServers || typeof config.mcpServers !== "object") config.mcpServers = {};
@@ -819,11 +813,7 @@ function installVscodeHookLocation(): { settingsPath: string; existed: boolean }
 
   let settings: Record<string, unknown> = {};
   if (existed) {
-    try {
-      settings = parseJsonc(fs.readFileSync(settingsPath, "utf8")) as Record<string, unknown>;
-    } catch {
-      throw new Error(`Could not parse existing ${settingsPath} — please check it is valid JSON.`);
-    }
+    settings = readJsonFileOrEmpty(settingsPath, parseJsonc);
   }
 
   const hookLocations = (settings["chat.hookFilesLocations"] ?? {}) as Record<string, boolean>;
@@ -890,11 +880,7 @@ function installVscodeMcpConfig(mcpServerPath: string): { configPath: string; ex
 
   let config: Record<string, unknown> = {};
   if (existed) {
-    try {
-      config = JSON.parse(fs.readFileSync(configPath, "utf8"));
-    } catch {
-      throw new Error(`Could not parse existing ${configPath} — please check it is valid JSON.`);
-    }
+    config = readJsonFileOrEmpty(configPath);
   }
 
   if (!config.servers || typeof config.servers !== "object") config.servers = {};
@@ -950,8 +936,10 @@ function checkVscodeMcpConfigured(): boolean {
 
 function parseCodexConfigOrEmpty(configPath: string): Record<string, unknown> {
   if (!fs.existsSync(configPath)) return {};
+  const raw = fs.readFileSync(configPath, "utf8").trim();
+  if (!raw) return {};
   try {
-    return parseToml(fs.readFileSync(configPath, "utf8")) as Record<string, unknown>;
+    return parseToml(raw) as Record<string, unknown>;
   } catch {
     throw new Error(`Could not parse existing ${configPath} — please check it is valid TOML.`);
   }
@@ -1121,8 +1109,10 @@ function uninstallCodexSkill(): "done" | "not_found" {
 
 function parseGeminiSettingsOrEmpty(settingsPath: string): Record<string, unknown> {
   if (!fs.existsSync(settingsPath)) return {};
+  const raw = fs.readFileSync(settingsPath, "utf8").trim();
+  if (!raw) return {};
   try {
-    return JSON.parse(fs.readFileSync(settingsPath, "utf8")) as Record<string, unknown>;
+    return JSON.parse(raw) as Record<string, unknown>;
   } catch {
     throw new Error(`Could not parse existing ${settingsPath} — please check it is valid JSON.`);
   }
