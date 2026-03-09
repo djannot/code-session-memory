@@ -50,8 +50,19 @@ let _sqliteVec: { load: (db: Database) => void } | null = null;
 
 function loadDeps() {
   if (!_Database) {
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    _Database = require("better-sqlite3");
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      _Database = require("better-sqlite3");
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes("NODE_MODULE_VERSION")) {
+        throw new Error(
+          `better-sqlite3 was compiled for a different Node.js version.\n` +
+          `Run "npx code-session-memory install" to recompile for your current Node.`,
+        );
+      }
+      throw err;
+    }
   }
   if (!_sqliteVec) {
     // eslint-disable-next-line @typescript-eslint/no-var-requires
