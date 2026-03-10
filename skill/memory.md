@@ -1,4 +1,5 @@
 ---
+name: code-session-memory
 description: Search past OpenCode, Claude Code, Cursor, VS Code, Codex, and Gemini CLI sessions stored in the shared vector memory database
 ---
 
