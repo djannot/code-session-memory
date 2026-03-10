@@ -110,7 +110,7 @@ function getOpenCodePluginDst(): string {
 }
 
 function getOpenCodeSkillDst(): string {
-  return path.join(getOpenCodeConfigDir(), "skills", "code-session-memory.md");
+  return path.join(getOpenCodeConfigDir(), "skills", "code-session-memory", "SKILL.md");
 }
 
 function getGlobalOpenCodeConfigPath(): string {

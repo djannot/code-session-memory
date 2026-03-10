@@ -34,7 +34,7 @@ function getOpenCodePluginDst(): string {
 }
 
 function getOpenCodeSkillDst(): string {
-  return path.join(getOpenCodeConfigDir(), "skills", "code-session-memory.md");
+  return path.join(getOpenCodeConfigDir(), "skills", "code-session-memory", "SKILL.md");
 }
 
 function getGlobalOpenCodeConfigPath(): string {
@@ -1685,7 +1685,13 @@ function uninstall(): void {
     }],
     ["OpenCode skill", () => {
       const p = getOpenCodeSkillDst();
-      if (fs.existsSync(p)) fs.unlinkSync(p);
+      if (fs.existsSync(p)) {
+        fs.unlinkSync(p);
+        try {
+          const dir = path.dirname(p);
+          if (fs.readdirSync(dir).length === 0) fs.rmdirSync(dir);
+        } catch { /* ignore */ }
+      }
       else throw new Error("not found");
     }],
     ["OpenCode MCP config", () => {

@@ -28,7 +28,7 @@ The `install` command sets up everything for all detected tools on your machine:
 
 **OpenCode:**
 1. Copies the plugin to `~/.config/opencode/plugins/code-session-memory.ts`
-2. Copies the skill to `~/.config/opencode/skills/code-session-memory.md`
+2. Copies the skill to `~/.config/opencode/skills/code-session-memory/SKILL.md`
 3. Writes the MCP server entry into `~/.config/opencode/opencode.json`
 
 **Claude Code:**
@@ -97,7 +97,7 @@ code-session-memory status
 
   OpenCode
     Plugin         ~/.config/opencode/plugins/code-session-memory.ts  ✓
-    Skill          ~/.config/opencode/skills/code-session-memory.md    ✓
+    Skill          ~/.config/opencode/skills/code-session-memory/SKILL.md  ✓
     MCP server     /path/to/dist/mcp/index.js                          ✓
     MCP config     ~/.config/opencode/opencode.json                    ✓
 
