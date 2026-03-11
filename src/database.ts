@@ -1,6 +1,7 @@
 import path from "path";
 import os from "os";
 import fs from "fs";
+import { execSync } from "child_process";
 import type { DocumentChunk, SessionMeta, SessionSource, DatabaseConfig, QueryResult } from "./types";
 
 const DEFAULT_EMBEDDING_DIMENSION = 3072;
@@ -56,12 +57,22 @@ function loadDeps() {
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       if (msg.includes("NODE_MODULE_VERSION")) {
-        throw new Error(
-          `better-sqlite3 was compiled for a different Node.js version.\n` +
-          `Run "npx code-session-memory install" to recompile for your current Node.`,
-        );
+        // Auto-rebuild for the current Node version and retry once
+        const pkgRoot = path.resolve(__dirname, "../..");
+        try {
+          execSync("npm rebuild better-sqlite3", { cwd: pkgRoot, stdio: "pipe" });
+          // eslint-disable-next-line @typescript-eslint/no-var-requires
+          _Database = require("better-sqlite3");
+        } catch (rebuildErr: unknown) {
+          const rebuildMsg = rebuildErr instanceof Error ? rebuildErr.message : String(rebuildErr);
+          throw new Error(
+            `better-sqlite3 auto-rebuild failed: ${rebuildMsg}\n` +
+            `Try manually: cd ${pkgRoot} && npm rebuild better-sqlite3`,
+          );
+        }
+      } else {
+        throw err;
       }
-      throw err;
     }
   }
   if (!_sqliteVec) {
