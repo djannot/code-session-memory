@@ -36,6 +36,10 @@ function getClaudeMdPath(): string {
   return path.join(getClaudeConfigDir(), "CLAUDE.md");
 }
 
+function getClaudeSkillDst(): string {
+  return path.join(getClaudeConfigDir(), "skills", "code-session-memory", "SKILL.md");
+}
+
 function getCursorConfigDir(): string {
   return process.env.CURSOR_CONFIG_DIR || path.join(os.homedir(), ".cursor");
 }
@@ -421,7 +425,7 @@ export function getStatus(): StatusResult {
     components: ccInstalled ? [
       { name: "MCP config", ok: checkClaudeMcpConfigured(), path: getClaudeUserConfigPath() },
       { name: "Stop hook", ok: checkClaudeHookInstalled(), path: getClaudeSettingsPath() },
-      { name: "CLAUDE.md", ok: checkClaudeMdInstalled(), path: getClaudeMdPath() },
+      { name: "Skill", ok: fs.existsSync(getClaudeSkillDst()), path: getClaudeSkillDst() },
     ] : [],
   };
 

@@ -33,7 +33,7 @@ The `install` command sets up everything for all detected tools on your machine:
 
 **Claude Code:**
 1. Writes a `Stop` hook to `~/.claude/settings.json` (fires after each agent turn)
-2. Injects the skill into `~/.claude/CLAUDE.md` (with idempotent markers)
+2. Copies the skill to `~/.claude/skills/code-session-memory/SKILL.md`
 3. Writes the MCP server entry into `~/.claude.json`
 
 **Cursor:**
@@ -103,7 +103,7 @@ code-session-memory status
 
   Claude Code
     Stop hook      ~/.claude.json                                      ✓
-    Skill          ~/.claude/CLAUDE.md                                 ✓
+    Skill          ~/.claude/skills/code-session-memory/SKILL.md        ✓
     MCP server     /path/to/dist/mcp/index.js                          ✓
 
   VS Code
