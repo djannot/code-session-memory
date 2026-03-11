@@ -61,7 +61,8 @@ function loadDeps() {
     } catch (err: unknown) {
       _Database = null; // reset so a restarted process starts fresh
       const msg = err instanceof Error ? err.message : String(err);
-      if (msg.includes("NODE_MODULE_VERSION")) {
+      const isAbiBroken = msg.includes("NODE_MODULE_VERSION") || msg.includes("Module did not self-register");
+      if (isAbiBroken) {
         // Auto-rebuild for the current Node version.
         //
         // Two subtleties:
@@ -81,11 +82,6 @@ function loadDeps() {
         try {
           process.stderr.write("[code-session-memory] Rebuilding better-sqlite3 for current Node version...\n");
           execSync(`"${npm}" rebuild better-sqlite3`, { cwd: rebuildRoot, stdio: "pipe", env });
-          // Native modules can't be reloaded in the same process after a failed dlopen.
-          // Re-execute this process fresh so Node starts with a clean module cache.
-          process.stderr.write("[code-session-memory] Restarting to apply rebuild...\n");
-          const result = spawnSync(process.execPath, process.argv.slice(1), { stdio: "inherit" });
-          process.exit(result.status ?? 0);
         } catch (rebuildErr: unknown) {
           const rebuildMsg = rebuildErr instanceof Error ? rebuildErr.message : String(rebuildErr);
           throw new Error(
@@ -93,6 +89,19 @@ function loadDeps() {
             `Try manually: cd ${rebuildRoot} && "${npm}" rebuild better-sqlite3`,
           );
         }
+        // In test environments (vitest/jest), calling process.exit() kills the
+        // worker process. The rebuild above fixed the binary on disk — just ask
+        // the user to re-run the tests.
+        if (process.env.VITEST || process.env.JEST_WORKER_ID) {
+          throw new Error(
+            `better-sqlite3 was rebuilt for Node ${process.version}. Please re-run the tests.`,
+          );
+        }
+        // In CLI processes: native modules can't be reloaded after a failed dlopen,
+        // so re-execute the process fresh with a clean module cache.
+        process.stderr.write("[code-session-memory] Restarting to apply rebuild...\n");
+        const result = spawnSync(process.execPath, process.argv.slice(1), { stdio: "inherit" });
+        process.exit(result.status ?? 0);
       } else {
         throw err;
       }

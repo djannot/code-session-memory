@@ -68,6 +68,10 @@ function getClaudeMdPath(): string {
   return path.join(getClaudeConfigDir(), "CLAUDE.md");
 }
 
+function getClaudeSkillDst(): string {
+  return path.join(getClaudeConfigDir(), "skills", "code-session-memory", "SKILL.md");
+}
+
 // ---------------------------------------------------------------------------
 // Paths — package
 // ---------------------------------------------------------------------------
@@ -428,6 +432,39 @@ function uninstallClaudeMd(): "done" | "not_found" {
     .replace(new RegExp(`\\n?\\n?${marker}[\\s\\S]*?${marker}\\n?`, "g"), "")
     .trimEnd();
   fs.writeFileSync(mdPath, updated ? updated + "\n" : "", "utf8");
+  return "done";
+}
+
+function installClaudeSkill(skillSrc: string): { dstPath: string; existed: boolean } {
+  const dstPath = getClaudeSkillDst();
+  const existed = fs.existsSync(dstPath);
+  if (!fs.existsSync(skillSrc)) {
+    throw new Error(`Skill source not found: ${skillSrc}\nDid you run "npm run build" first?`);
+  }
+  const skillBody = fs.readFileSync(skillSrc, "utf8");
+  const bodyWithoutFrontmatter = skillBody.replace(/^---[\s\S]*?---\s*\n?/, "").trimStart();
+  const frontmatter = [
+    "---",
+    "name: code-session-memory",
+    "description: Search past OpenCode, Claude Code, Cursor, VS Code, Codex, and Gemini CLI sessions. Use when the user asks about past work, decisions, or implementations.",
+    "---",
+    "",
+  ].join("\n");
+  ensureDir(path.dirname(dstPath));
+  fs.writeFileSync(dstPath, frontmatter + bodyWithoutFrontmatter, "utf8");
+  // Migrate: clean up old CLAUDE.md injection if present
+  uninstallClaudeMd();
+  return { dstPath, existed };
+}
+
+function checkClaudeSkillInstalled(): boolean {
+  return fs.existsSync(getClaudeSkillDst());
+}
+
+function uninstallClaudeSkill(): "done" | "not_found" {
+  const dst = getClaudeSkillDst();
+  if (!fs.existsSync(dst)) return "not_found";
+  fs.rmSync(path.dirname(dst), { recursive: true, force: true });
   return "done";
 }
 
@@ -1455,9 +1492,9 @@ function install(): void {
     return `${existed ? "updated" : "created"} ${settingsPath}`;
   });
 
-  stepIf(claudeInstalled, "Installing Claude Code context (CLAUDE.md)", () => {
-    const { mdPath, existed } = installClaudeMd(getSkillSrc());
-    return `${existed ? "updated" : "created"} ${mdPath}`;
+  stepIf(claudeInstalled, "Installing Claude Code skill", () => {
+    const { dstPath, existed } = installClaudeSkill(getSkillSrc());
+    return `${existed ? "updated" : "created"} ${dstPath}`;
   });
 
   // Cursor
@@ -1566,7 +1603,7 @@ function status(): void {
     console.log(bold("\n  Claude Code"));
     console.log(`  ${ok(checkClaudeMcpConfigured())}  MCP config  ${dim(getClaudeUserConfigPath())}`);
     console.log(`  ${ok(checkClaudeHookInstalled())}  Stop hook   ${dim(getClaudeSettingsPath())}`);
-    console.log(`  ${ok(checkClaudeMdInstalled())}  CLAUDE.md   ${dim(getClaudeMdPath())}`);
+    console.log(`  ${ok(checkClaudeSkillInstalled())}  Skill       ${dim(getClaudeSkillDst())}`);
   } else {
     console.log(bold("\n  Claude Code") + dim("  (not installed — skipped)"));
   }
@@ -1642,7 +1679,7 @@ function status(): void {
     (!claudeInstalled || (
       checkClaudeMcpConfigured() &&
       checkClaudeHookInstalled() &&
-      checkClaudeMdInstalled()
+      checkClaudeSkillInstalled()
     )) &&
     (!cursorInstalled || (
       checkCursorMcpConfigured() &&
@@ -1703,8 +1740,8 @@ function uninstall(): void {
     ["Claude Code hook", () => {
       if (uninstallClaudeHook() === "not_found") throw new Error("not found");
     }],
-    ["Claude Code CLAUDE.md", () => {
-      if (uninstallClaudeMd() === "not_found") throw new Error("not found");
+    ["Claude Code skill", () => {
+      if (uninstallClaudeSkill() === "not_found") throw new Error("not found");
     }],
     ["Cursor MCP config", () => {
       if (uninstallCursorMcpConfig() === "not_found") throw new Error("not found");
