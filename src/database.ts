@@ -57,17 +57,23 @@ function loadDeps() {
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       if (msg.includes("NODE_MODULE_VERSION")) {
-        // Auto-rebuild for the current Node version and retry once
+        // Auto-rebuild for the current Node version and retry once.
+        // Use the npm sibling to process.execPath so the rebuild targets the same
+        // ABI as the running process, not whatever npm happens to be on PATH.
         const pkgRoot = path.resolve(__dirname, "../..");
+        const npmPath = path.join(path.dirname(process.execPath), "npm");
+        const npm = fs.existsSync(npmPath) ? npmPath : "npm";
         try {
-          execSync("npm rebuild better-sqlite3", { cwd: pkgRoot, stdio: "pipe" });
+          process.stderr.write("[code-session-memory] Rebuilding better-sqlite3 for current Node version...\n");
+          execSync(`"${npm}" rebuild better-sqlite3`, { cwd: pkgRoot, stdio: "pipe" });
           // eslint-disable-next-line @typescript-eslint/no-var-requires
           _Database = require("better-sqlite3");
+          process.stderr.write("[code-session-memory] Rebuild successful.\n");
         } catch (rebuildErr: unknown) {
           const rebuildMsg = rebuildErr instanceof Error ? rebuildErr.message : String(rebuildErr);
           throw new Error(
             `better-sqlite3 auto-rebuild failed: ${rebuildMsg}\n` +
-            `Try manually: cd ${pkgRoot} && npm rebuild better-sqlite3`,
+            `Try manually: cd ${pkgRoot} && "${npm}" rebuild better-sqlite3`,
           );
         }
       } else {
