@@ -4,8 +4,8 @@ import { OpenAI } from "openai";
 // Constants (matching doc2vec limits)
 // ---------------------------------------------------------------------------
 const MAX_EMBEDDING_TOKENS = 8191; // OpenAI text-embedding-3-large limit
-const CHARS_PER_TOKEN = 4; // Conservative BPE estimate
-const MAX_EMBEDDING_CHARS = MAX_EMBEDDING_TOKENS * CHARS_PER_TOKEN; // 32 764
+const CHARS_PER_TOKEN = 2.5; // Conservative BPE estimate (code/JSON has many short tokens)
+const MAX_EMBEDDING_CHARS = Math.floor(MAX_EMBEDDING_TOKENS * CHARS_PER_TOKEN); // ~20 477
 
 // Batch size: OpenAI allows up to 2048 inputs per request, but keep it
 // conservative to stay well within rate-limits.
@@ -52,32 +52,40 @@ export function createEmbedder(options: EmbedderOptions = {}) {
 
   /**
    * Embeds a batch of texts, splitting into sub-batches to avoid API limits.
+   * Sub-batches are processed in parallel (up to CONCURRENCY at a time).
    */
   async function embedBatch(texts: string[]): Promise<number[][]> {
     if (texts.length === 0) return [];
 
-    const results: number[][] = [];
-
+    // Split into sub-batches of BATCH_SIZE
+    const batches: string[][] = [];
     for (let i = 0; i < texts.length; i += BATCH_SIZE) {
-      const batch = texts.slice(i, i + BATCH_SIZE).map((t) =>
-        t.length > MAX_EMBEDDING_CHARS ? t.slice(0, MAX_EMBEDDING_CHARS) : t,
+      batches.push(
+        texts.slice(i, i + BATCH_SIZE).map((t) =>
+          t.length > MAX_EMBEDDING_CHARS ? t.slice(0, MAX_EMBEDDING_CHARS) : t,
+        ),
       );
-
-      const response = await client.embeddings.create({
-        model,
-        input: batch,
-      });
-
-      // OpenAI returns embeddings in the same order as inputs
-      const sorted = response.data
-        .slice()
-        .sort((a, b) => a.index - b.index)
-        .map((d) => d.embedding);
-
-      results.push(...sorted);
     }
 
-    return results;
+    // Process up to CONCURRENCY batches in parallel
+    const CONCURRENCY = 4;
+    const batchResults: number[][][] = [];
+
+    for (let i = 0; i < batches.length; i += CONCURRENCY) {
+      const window = batches.slice(i, i + CONCURRENCY);
+      const results = await Promise.all(
+        window.map(async (batch) => {
+          const response = await client.embeddings.create({ model, input: batch });
+          return response.data
+            .slice()
+            .sort((a, b) => a.index - b.index)
+            .map((d) => d.embedding);
+        }),
+      );
+      batchResults.push(...results);
+    }
+
+    return batchResults.flat();
   }
 
   return { embedText, embedBatch };

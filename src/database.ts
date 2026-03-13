@@ -2,7 +2,11 @@ import path from "path";
 import os from "os";
 import fs from "fs";
 import { execSync, spawnSync } from "child_process";
-import type { DocumentChunk, SessionMeta, SessionSource, DatabaseConfig, QueryResult } from "./types";
+import type {
+  DocumentChunk, SessionMeta, SessionSource, DatabaseConfig, QueryResult,
+  MessageRow, ToolCallRow, AnalyticsFilter, ToolUsageStat, MessageStat,
+  OverviewStats, SessionAnalytics,
+} from "./types";
 
 const DEFAULT_EMBEDDING_DIMENSION = 3072;
 
@@ -195,6 +199,44 @@ export function initSchema(db: Database, embeddingDimension = DEFAULT_EMBEDDING_
   } catch {
     // Column already exists — ignore
   }
+
+  // Structured analytics tables
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS messages (
+      id              TEXT NOT NULL,
+      session_id      TEXT NOT NULL,
+      role            TEXT NOT NULL,
+      created_at      INTEGER,
+      text_length     INTEGER NOT NULL DEFAULT 0,
+      part_count      INTEGER NOT NULL DEFAULT 0,
+      tool_call_count INTEGER NOT NULL DEFAULT 0,
+      message_order   INTEGER NOT NULL DEFAULT 0,
+      indexed_at      INTEGER NOT NULL,
+      PRIMARY KEY (session_id, id)
+    );
+  `);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id)`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_messages_role ON messages(role)`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_messages_created ON messages(created_at)`);
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS tool_calls (
+      id              INTEGER PRIMARY KEY AUTOINCREMENT,
+      message_id      TEXT NOT NULL,
+      session_id      TEXT NOT NULL,
+      tool_name       TEXT NOT NULL,
+      tool_call_id    TEXT,
+      status          TEXT,
+      has_error       INTEGER NOT NULL DEFAULT 0,
+      args_length     INTEGER NOT NULL DEFAULT 0,
+      result_length   INTEGER NOT NULL DEFAULT 0,
+      created_at      INTEGER,
+      indexed_at      INTEGER NOT NULL
+    );
+  `);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_tool_calls_session ON tool_calls(session_id)`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_tool_calls_name ON tool_calls(tool_name)`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_tool_calls_message ON tool_calls(session_id, message_id)`);
 }
 
 // ---------------------------------------------------------------------------
@@ -297,6 +339,59 @@ export function insertChunks(
   });
 
   insertMany(chunks.map((chunk, i) => ({ chunk, embedding: embeddings[i] })));
+}
+
+// ---------------------------------------------------------------------------
+// Structured analytics insertion
+// ---------------------------------------------------------------------------
+
+/**
+ * Batch-inserts message rows. Duplicate (session_id, id) pairs are silently
+ * skipped via INSERT OR IGNORE (idempotent for incremental indexing).
+ */
+export function insertMessages(db: Database, rows: MessageRow[]): void {
+  if (rows.length === 0) return;
+  const stmt = db.prepare(`
+    INSERT OR IGNORE INTO messages
+      (id, session_id, role, created_at, text_length, part_count,
+       tool_call_count, message_order, indexed_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+  const insertMany = db.transaction((...args: unknown[]) => {
+    const items = args[0] as MessageRow[];
+    for (const r of items) {
+      stmt.run(
+        r.id, r.session_id, r.role, r.created_at,
+        r.text_length, r.part_count, r.tool_call_count,
+        r.message_order, r.indexed_at,
+      );
+    }
+  });
+  insertMany(rows);
+}
+
+/**
+ * Batch-inserts tool call rows.
+ */
+export function insertToolCalls(db: Database, rows: ToolCallRow[]): void {
+  if (rows.length === 0) return;
+  const stmt = db.prepare(`
+    INSERT INTO tool_calls
+      (message_id, session_id, tool_name, tool_call_id, status, has_error,
+       args_length, result_length, created_at, indexed_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+  const insertMany = db.transaction((...args: unknown[]) => {
+    const items = args[0] as ToolCallRow[];
+    for (const r of items) {
+      stmt.run(
+        r.message_id, r.session_id, r.tool_name, r.tool_call_id,
+        r.status, r.has_error, r.args_length, r.result_length,
+        r.created_at, r.indexed_at,
+      );
+    }
+  });
+  insertMany(rows);
 }
 
 // ---------------------------------------------------------------------------
@@ -643,6 +738,8 @@ export function deleteSession(db: Database, sessionId: string): number {
   const deleteChunks = db.prepare("DELETE FROM vec_items WHERE session_id = ?");
   const deleteFts    = db.prepare("DELETE FROM chunks_fts WHERE chunk_id = ?");
   const deleteMeta   = db.prepare("DELETE FROM sessions_meta WHERE session_id = ?");
+  const deleteMessages  = db.prepare("DELETE FROM messages WHERE session_id = ?");
+  const deleteToolCalls = db.prepare("DELETE FROM tool_calls WHERE session_id = ?");
 
   let chunkCount = 0;
   db.transaction(() => {
@@ -652,6 +749,8 @@ export function deleteSession(db: Database, sessionId: string): number {
     }
     const result = deleteChunks.run(sessionId);
     chunkCount = result.changes;
+    deleteToolCalls.run(sessionId);
+    deleteMessages.run(sessionId);
     deleteMeta.run(sessionId);
   })();
 
@@ -673,6 +772,8 @@ export function deleteSessionsOlderThan(
   const deleteChunks = db.prepare("DELETE FROM vec_items WHERE session_id = ?");
   const deleteFts    = db.prepare("DELETE FROM chunks_fts WHERE chunk_id = ?");
   const deleteMeta   = db.prepare("DELETE FROM sessions_meta WHERE session_id = ?");
+  const deleteMessages  = db.prepare("DELETE FROM messages WHERE session_id = ?");
+  const deleteToolCalls = db.prepare("DELETE FROM tool_calls WHERE session_id = ?");
 
   let totalChunks = 0;
   db.transaction(() => {
@@ -683,9 +784,188 @@ export function deleteSessionsOlderThan(
       }
       const result = deleteChunks.run(s.session_id);
       totalChunks += result.changes;
+      deleteToolCalls.run(s.session_id);
+      deleteMessages.run(s.session_id);
       deleteMeta.run(s.session_id);
     }
   })();
 
   return { sessions: candidates.length, chunks: totalChunks };
+}
+
+// ---------------------------------------------------------------------------
+// Analytics queries
+// ---------------------------------------------------------------------------
+
+function buildAnalyticsWhere(
+  filter: AnalyticsFilter | undefined,
+  tableAlias: string,
+  metaAlias: string,
+): { clauses: string; params: unknown[] } {
+  const clauses: string[] = [];
+  const params: unknown[] = [];
+  if (filter?.source) {
+    clauses.push(`${metaAlias}.source = ?`);
+    params.push(filter.source);
+  }
+  if (filter?.project) {
+    clauses.push(`${metaAlias}.project = ?`);
+    params.push(filter.project);
+  }
+  if (typeof filter?.fromMs === "number") {
+    clauses.push(`${tableAlias}.created_at >= ?`);
+    params.push(filter.fromMs);
+  }
+  if (typeof filter?.toMs === "number") {
+    clauses.push(`${tableAlias}.created_at <= ?`);
+    params.push(filter.toMs);
+  }
+  return {
+    clauses: clauses.length > 0 ? " AND " + clauses.join(" AND ") : "",
+    params,
+  };
+}
+
+/**
+ * Returns tool usage stats: call count, error count, and distinct session count per tool.
+ */
+export function getToolUsageStats(
+  db: Database,
+  filter?: AnalyticsFilter,
+): ToolUsageStat[] {
+  const { clauses, params } = buildAnalyticsWhere(filter, "t", "m");
+  return db.prepare(`
+    SELECT
+      t.tool_name,
+      COUNT(*)                       AS call_count,
+      SUM(t.has_error)               AS error_count,
+      COUNT(DISTINCT t.session_id)   AS session_count
+    FROM tool_calls t
+    JOIN sessions_meta m ON t.session_id = m.session_id
+    WHERE 1=1${clauses}
+    GROUP BY t.tool_name
+    ORDER BY call_count DESC
+  `).all(...params) as ToolUsageStat[];
+}
+
+/**
+ * Returns message counts grouped by role.
+ */
+export function getMessageStats(
+  db: Database,
+  filter?: AnalyticsFilter,
+): MessageStat[] {
+  const { clauses, params } = buildAnalyticsWhere(filter, "msg", "m");
+  return db.prepare(`
+    SELECT
+      msg.role,
+      COUNT(*) AS count
+    FROM messages msg
+    JOIN sessions_meta m ON msg.session_id = m.session_id
+    WHERE 1=1${clauses}
+    GROUP BY msg.role
+    ORDER BY count DESC
+  `).all(...params) as MessageStat[];
+}
+
+/**
+ * Returns aggregate overview stats across all indexed structured data.
+ */
+export function getOverviewStats(
+  db: Database,
+  filter?: AnalyticsFilter,
+): OverviewStats {
+  const { clauses: msgClauses, params: msgParams } = buildAnalyticsWhere(filter, "msg", "m");
+  const msgStats = db.prepare(`
+    SELECT
+      COUNT(DISTINCT msg.session_id)  AS total_sessions,
+      COUNT(*)                        AS total_messages,
+      MIN(msg.created_at)             AS earliest_message_at,
+      MAX(msg.created_at)             AS latest_message_at
+    FROM messages msg
+    JOIN sessions_meta m ON msg.session_id = m.session_id
+    WHERE 1=1${msgClauses}
+  `).get(...msgParams) as {
+    total_sessions: number;
+    total_messages: number;
+    earliest_message_at: number | null;
+    latest_message_at: number | null;
+  };
+
+  const { clauses: tcClauses, params: tcParams } = buildAnalyticsWhere(filter, "t", "m");
+  const tcStats = db.prepare(`
+    SELECT COUNT(*) AS total_tool_calls
+    FROM tool_calls t
+    JOIN sessions_meta m ON t.session_id = m.session_id
+    WHERE 1=1${tcClauses}
+  `).get(...tcParams) as { total_tool_calls: number };
+
+  return {
+    total_sessions: msgStats.total_sessions,
+    total_messages: msgStats.total_messages,
+    total_tool_calls: tcStats.total_tool_calls,
+    earliest_message_at: msgStats.earliest_message_at,
+    latest_message_at: msgStats.latest_message_at,
+  };
+}
+
+/**
+ * Returns detailed analytics for a single session.
+ */
+export function getSessionAnalytics(
+  db: Database,
+  sessionId: string,
+): SessionAnalytics | null {
+  const msgCount = db.prepare(
+    "SELECT COUNT(*) AS cnt FROM messages WHERE session_id = ?",
+  ).get(sessionId) as { cnt: number };
+  if (msgCount.cnt === 0) return null;
+
+  const tcCount = db.prepare(
+    "SELECT COUNT(*) AS cnt FROM tool_calls WHERE session_id = ?",
+  ).get(sessionId) as { cnt: number };
+
+  // Approximate active session duration: sum of consecutive message gaps,
+  // capping each gap at 30 minutes to exclude idle periods (overnight, etc.)
+  const duration = db.prepare(`
+    WITH ordered AS (
+      SELECT created_at,
+             LEAD(created_at) OVER (ORDER BY message_order) AS next_at
+      FROM messages
+      WHERE session_id = ? AND created_at IS NOT NULL
+    )
+    SELECT COALESCE(SUM(
+      CASE WHEN next_at - created_at <= 1800000
+           THEN next_at - created_at
+           ELSE 0
+      END
+    ), 0) AS approx_duration_ms
+    FROM ordered
+    WHERE next_at IS NOT NULL
+  `).get(sessionId) as { approx_duration_ms: number | null };
+
+  const messagesByRole = db.prepare(`
+    SELECT role, COUNT(*) AS count
+    FROM messages WHERE session_id = ?
+    GROUP BY role ORDER BY count DESC
+  `).all(sessionId) as MessageStat[];
+
+  const toolBreakdown = db.prepare(`
+    SELECT
+      tool_name,
+      COUNT(*)         AS call_count,
+      SUM(has_error)   AS error_count,
+      1                AS session_count
+    FROM tool_calls WHERE session_id = ?
+    GROUP BY tool_name ORDER BY call_count DESC
+  `).all(sessionId) as ToolUsageStat[];
+
+  return {
+    session_id: sessionId,
+    message_count: msgCount.cnt,
+    tool_call_count: tcCount.cnt,
+    approx_duration_ms: duration.approx_duration_ms,
+    messages_by_role: messagesByRole,
+    tool_breakdown: toolBreakdown,
+  };
 }

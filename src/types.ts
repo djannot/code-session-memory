@@ -116,3 +116,89 @@ export interface DatabaseConfig {
   dbPath: string;
   embeddingDimension?: number;
 }
+
+// ---------------------------------------------------------------------------
+// Structured analytics tables
+// ---------------------------------------------------------------------------
+
+/**
+ * A row in the `messages` table — one per message indexed.
+ */
+export interface MessageRow {
+  id: string;
+  session_id: string;
+  role: "user" | "assistant" | "tool";
+  created_at: number | null;
+  text_length: number;
+  part_count: number;
+  tool_call_count: number;
+  message_order: number;
+  indexed_at: number;
+}
+
+/**
+ * A row in the `tool_calls` table — one per tool invocation extracted from messages.
+ */
+export interface ToolCallRow {
+  message_id: string;
+  session_id: string;
+  tool_name: string;
+  tool_call_id: string | null;
+  status: string | null;
+  has_error: number;
+  args_length: number;
+  result_length: number;
+  created_at: number | null;
+  indexed_at: number;
+}
+
+/**
+ * Filter options for analytics queries.
+ */
+export interface AnalyticsFilter {
+  source?: SessionSource;
+  project?: string;
+  fromMs?: number;
+  toMs?: number;
+}
+
+/**
+ * Tool usage statistics returned by getToolUsageStats().
+ */
+export interface ToolUsageStat {
+  tool_name: string;
+  call_count: number;
+  error_count: number;
+  session_count: number;
+}
+
+/**
+ * Per-role message count returned by getMessageStats().
+ */
+export interface MessageStat {
+  role: string;
+  count: number;
+}
+
+/**
+ * Overview statistics returned by getOverviewStats().
+ */
+export interface OverviewStats {
+  total_sessions: number;
+  total_messages: number;
+  total_tool_calls: number;
+  earliest_message_at: number | null;
+  latest_message_at: number | null;
+}
+
+/**
+ * Per-session analytics returned by getSessionAnalytics().
+ */
+export interface SessionAnalytics {
+  session_id: string;
+  message_count: number;
+  tool_call_count: number;
+  approx_duration_ms: number | null;
+  messages_by_role: MessageStat[];
+  tool_breakdown: ToolUsageStat[];
+}

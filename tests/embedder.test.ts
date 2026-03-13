@@ -34,13 +34,13 @@ describe("createEmbedder", () => {
       expect(result).toEqual([0.5, 0.6, 0.7]);
     });
 
-    it("truncates text exceeding 32764 characters", async () => {
+    it("truncates text exceeding 20477 characters", async () => {
       const mock = makeOpenAIMock([0.1]);
       const embedder = createEmbedder({ client: mock });
       const longText = "a".repeat(40000);
       await embedder.embedText(longText);
       const call = vi.mocked(mock.embeddings.create).mock.calls[0][0];
-      expect((call as { input: string }).input.length).toBe(32764);
+      expect((call as { input: string }).input.length).toBe(20477);
     });
 
     it("does not truncate text within limit", async () => {
@@ -130,7 +130,7 @@ describe("createEmbedder", () => {
 
       const call = vi.mocked(mock.embeddings.create).mock.calls[0][0];
       const batchInput = (call as { input: string[] }).input;
-      expect(batchInput[0].length).toBe(32764);
+      expect(batchInput[0].length).toBe(20477);
     });
   });
 });

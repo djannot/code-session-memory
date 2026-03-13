@@ -268,7 +268,7 @@ Open `http://localhost:3333` in your browser. The web UI includes:
 
 - **Search** — Semantic search with filters (source, date range, result limit)
 - **Sessions** — Browse, filter, and manage all indexed sessions
-- **Session detail** — View all chunks of a session in order
+- **Session detail** — View all chunks with role badges (User, Assistant, Tool: name), analytics (message counts, tool call breakdown, active duration)
 - **Status** — Database stats and per-tool installation status
 - **Delete / Purge** — Remove individual sessions or purge old ones
 
@@ -331,7 +331,7 @@ code-session-memory/
 │   ├── types.ts                  # Shared TypeScript types
 │   ├── database.ts               # SQLite-vec: init, insert, query
 │   ├── chunker.ts                # Heading-aware markdown chunker
-│   ├── embedder.ts               # OpenAI embeddings (batched)
+│   ├── embedder.ts               # OpenAI embeddings (parallel batched)
 │   ├── session-to-md.ts          # OpenCode SDK messages → markdown
 │   ├── transcript-to-messages.ts          # Claude Code JSONL transcript parser
 │   ├── cursor-to-messages.ts             # Cursor state.vscdb reader (metadata + title)
@@ -435,13 +435,15 @@ Tests use [Vitest](https://vitest.dev) and run without any external dependencies
  ✓ tests/indexer.test.ts                           (9 tests)
  ✓ tests/cursor-to-messages.test.ts               (15 tests)
  ✓ tests/cursor-transcript-to-messages.test.ts     (7 tests)
+ ✓ tests/vscode-transcript-to-messages.test.ts     (7 tests)
+ ✓ tests/codex-session-to-messages.test.ts        (14 tests)
  ✓ tests/gemini-session-to-messages.test.ts         (5 tests)
  ✓ tests/opencode-db-to-messages.test.ts           (8 tests)
  ✓ tests/cli-query.test.ts                        (23 tests)
  ✓ tests/e2e-claude.test.ts                       (18 tests)
  ✓ tests/e2e-cursor.test.ts                        (8 tests)
  ✓ tests/e2e-opencode.test.ts                     (14 tests)
-   Tests  249 passed
+   Tests  270 passed
 ```
 
 To refresh the e2e fixtures (e.g. after changing the indexer or parsers), run:
@@ -498,7 +500,7 @@ The plugin/hook fires on every agent turn. To avoid re-processing the entire ses
 3. Processes only the new messages — renders, chunks, and embeds all of them in a **single batched OpenAI API call**
 4. Updates `last_indexed_message_id` after success
 
-This makes each indexing pass O(new messages) rather than O(all messages), and limits network round-trips to one embedding call per turn regardless of message count.
+This makes each indexing pass O(new messages) rather than O(all messages). Embedding sub-batches (64 texts each) are sent to the OpenAI API in parallel (up to 4 concurrent requests), keeping network latency low even for large sessions.
 
 ### Why a Node.js subprocess?
 
@@ -509,7 +511,7 @@ OpenCode plugins run inside **Bun**, but `better-sqlite3` and `sqlite-vec` are n
 Claude Code writes a JSONL transcript after each session turn. The parser (`transcript-to-messages.ts`) handles:
 - Deduplicating streaming `assistant` chunks (keeps the last entry per `message.id`)
 - Skipping internal `thinking` blocks, metadata entries, and error messages
-- Converting `tool_use` / `tool_result` entries to readable markdown
+- Merging `tool_result` user messages back into their corresponding `tool_use` assistant blocks, so each tool call is a single message with both Input and Output (matching the behavior of Cursor, Codex, and Gemini CLI parsers)
 
 ### Cursor session reading
 
@@ -532,10 +534,48 @@ Gemini CLI provides `transcript_path` and `session_id` in the `AfterAgent` hook 
 ### Chunking strategy
 
 - Heading-aware splitting — headings define semantic boundaries
+- Tool calls use `### Tool: name` headings, always split into separate chunks (never merged with adjacent sections)
 - Max 1000 whitespace-tokenized words per chunk
-- Sections below 150 words are merged with adjacent sections
+- Non-tool sections below 150 words are merged with adjacent non-tool sections
 - Sections above 1000 words are split with 10% overlap
 - Each chunk gets a `[Session: Title > Section]` breadcrumb prefix injected before embedding, improving retrieval precision
+
+### Session analytics
+
+Alongside vector chunks, the indexer populates two relational tables for structured analytics:
+
+**`messages` table** — one row per message:
+| Column | Description |
+|---|---|
+| `role` | `user`, `assistant`, or `tool` |
+| `created_at` | Timestamp (ms since epoch) |
+| `text_length` | Character count of text parts |
+| `tool_call_count` | Number of tool invocations in this message |
+| `message_order` | Position within the session |
+
+**`tool_calls` table** — one row per tool invocation:
+| Column | Description |
+|---|---|
+| `tool_name` | e.g. `Read`, `Bash`, `Edit`, `Agent` |
+| `status` | `call`, `result`, or `error` |
+| `has_error` | `1` if the tool errored |
+| `args_length` | Size of the serialized input |
+| `result_length` | Size of the serialized output |
+
+These tables are populated idempotently during Phase 0 of indexing (before chunk/embedding work), so they are backfilled even for sessions indexed before the analytics tables existed.
+
+**Per-session analytics** (shown in the web UI session detail):
+- Message counts by role (User, Assistant)
+- Total tool call count with per-tool breakdown (e.g. `Read 45, Bash 23, Edit 12`)
+- Approximate active duration — computed using a `LEAD()` window function over message timestamps, capping each inter-message gap at 30 minutes to exclude idle periods
+
+**REST API endpoints:**
+| Endpoint | Description |
+|---|---|
+| `GET /api/analytics/overview` | Aggregate totals across all sessions |
+| `GET /api/analytics/tools` | Tool usage stats (filterable by source, date range) |
+| `GET /api/analytics/messages` | Message counts by role |
+| `GET /api/analytics/session/:id` | Per-session analytics detail |
 
 ### MCP server
 

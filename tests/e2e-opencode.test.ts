@@ -121,8 +121,8 @@ describe("messageToMarkdown — OpenCode parts", () => {
       m.parts.some((p) => p.type === "tool"),
     );
     const md = messageToMarkdown(assistantMsg!);
-    // The glob tool was used — should show **Tool: glob**
-    expect(md).toContain("**Tool:");
+    // The glob tool was used — should show ### Tool: glob
+    expect(md).toContain("### Tool:");
   });
 
   it("tool part markdown includes input and output", () => {

@@ -113,7 +113,7 @@ describe("sessionToMarkdown", () => {
       ],
     };
     const md = sessionToMarkdown(makeSession(), [makeUserMessage("Run tests"), msg]);
-    expect(md).toContain("**Tool: bash**");
+    expect(md).toContain("### Tool: bash");
     expect(md).toContain("npm test");
     expect(md).toContain("All tests passed");
   });
@@ -179,7 +179,7 @@ describe("messageToMarkdown", () => {
       ],
     };
     const md = messageToMarkdown(msg);
-    expect(md).toContain("**Tool: write**");
+    expect(md).toContain("### Tool: write");
     expect(md).toContain("foo.ts");
     expect(md).toContain("Done!");
   });

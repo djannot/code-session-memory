@@ -20,7 +20,7 @@ function renderToolPart(part: MessagePart): string {
   const lines: string[] = [];
   const name = part.toolName ?? "unknown";
 
-  lines.push(`**Tool: ${name}**`);
+  lines.push(`### Tool: ${name}`);
   lines.push("");
 
   if (part.args !== undefined) {
@@ -66,7 +66,7 @@ function renderOpenCodeToolPart(part: MessagePart): string {
   const name = part.tool ?? "unknown";
   const state = part.state as ToolState | undefined;
 
-  lines.push(`**Tool: ${name}**`);
+  lines.push(`### Tool: ${name}`);
   lines.push("");
 
   if (state?.input !== undefined) {

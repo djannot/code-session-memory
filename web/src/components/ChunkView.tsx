@@ -21,12 +21,20 @@ function getRoleStyle(section: string): { bg: string; label: string; labelBg: st
       roleName: section,
     };
   }
-  if (lower.startsWith("tool")) {
+  if (lower === "tool result" || lower === "tool") {
     return {
       bg: "bg-amber-200/25",
       label: "text-amber-700",
       labelBg: "bg-amber-200/40",
       roleName: "Tool Result",
+    };
+  }
+  if (lower.startsWith("tool:")) {
+    return {
+      bg: "bg-purple-200/25",
+      label: "text-purple-700",
+      labelBg: "bg-purple-200/40",
+      roleName: section,
     };
   }
   return null;

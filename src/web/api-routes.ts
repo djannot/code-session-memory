@@ -17,10 +17,14 @@ import {
   getSessionChunksOrdered,
   deleteSession,
   deleteSessionsOlderThan,
+  getToolUsageStats,
+  getMessageStats,
+  getOverviewStats,
+  getSessionAnalytics,
 } from "../database";
 import { createEmbedder } from "../embedder";
 import { getStatus } from "../status";
-import type { SessionSource } from "../types";
+import type { SessionSource, AnalyticsFilter } from "../types";
 
 // ---------------------------------------------------------------------------
 // DB helper
@@ -59,6 +63,25 @@ const VALID_SOURCES = new Set<string>([
 ]);
 
 const VALID_SECTIONS = new Set<string>(["user", "assistant", "tool"]);
+
+function parseAnalyticsFilter(req: Request): AnalyticsFilter {
+  const filter: AnalyticsFilter = {};
+  if (typeof req.query.source === "string" && VALID_SOURCES.has(req.query.source)) {
+    filter.source = req.query.source as SessionSource;
+  }
+  if (typeof req.query.project === "string" && req.query.project) {
+    filter.project = req.query.project;
+  }
+  if (typeof req.query.from === "string" && req.query.from) {
+    const ms = parseDateMs(req.query.from, "start");
+    if (ms !== null) filter.fromMs = ms;
+  }
+  if (typeof req.query.to === "string" && req.query.to) {
+    const ms = parseDateMs(req.query.to, "end");
+    if (ms !== null) filter.toMs = ms;
+  }
+  return filter;
+}
 
 // ---------------------------------------------------------------------------
 // Routes
@@ -248,6 +271,62 @@ export function createApiRouter(): Router {
       const cutoff = Date.now() - days * DAY_MS;
       const result = withDb((db) => deleteSessionsOlderThan(db, cutoff));
       res.json(result);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      res.status(500).json({ error: message });
+    }
+  });
+
+  // -------------------------------------------------------------------------
+  // Analytics endpoints
+  // -------------------------------------------------------------------------
+
+  // GET /api/analytics/overview — aggregate totals
+  router.get("/analytics/overview", (req: Request, res: Response) => {
+    try {
+      const filter = parseAnalyticsFilter(req);
+      const stats = withDb((db) => getOverviewStats(db, filter));
+      res.json(stats);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      res.status(500).json({ error: message });
+    }
+  });
+
+  // GET /api/analytics/tools — tool usage stats
+  router.get("/analytics/tools", (req: Request, res: Response) => {
+    try {
+      const filter = parseAnalyticsFilter(req);
+      const stats = withDb((db) => getToolUsageStats(db, filter));
+      res.json({ tools: stats });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      res.status(500).json({ error: message });
+    }
+  });
+
+  // GET /api/analytics/messages — message counts by role
+  router.get("/analytics/messages", (req: Request, res: Response) => {
+    try {
+      const filter = parseAnalyticsFilter(req);
+      const stats = withDb((db) => getMessageStats(db, filter));
+      res.json({ messages: stats });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      res.status(500).json({ error: message });
+    }
+  });
+
+  // GET /api/analytics/session/:id — per-session analytics
+  router.get("/analytics/session/:id", (req: Request, res: Response) => {
+    try {
+      const sessionId = String(req.params.id);
+      const analytics = withDb((db) => getSessionAnalytics(db, sessionId));
+      if (!analytics) {
+        res.status(404).json({ error: "No analytics data for this session" });
+        return;
+      }
+      res.json(analytics);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       res.status(500).json({ error: message });

@@ -377,6 +377,9 @@ export interface StatusResult {
   dbSizeBytes: number;
   totalSessions: number;
   totalChunks: number;
+  totalMessages: number;
+  totalToolCalls: number;
+  topTools: Array<{ tool_name: string; call_count: number }>;
   sessionsBySource: Array<{ source: string; count: number }>;
   tools: Record<string, ToolStatus>;
   allOk: boolean;
@@ -390,6 +393,9 @@ export function getStatus(): StatusResult {
   let dbSizeBytes = 0;
   let totalSessions = 0;
   let totalChunks = 0;
+  let totalMessages = 0;
+  let totalToolCalls = 0;
+  let topTools: Array<{ tool_name: string; call_count: number }> = [];
   let sessionsBySource: Array<{ source: string; count: number }> = [];
 
   if (dbExists) {
@@ -401,6 +407,16 @@ export function getStatus(): StatusResult {
       sessionsBySource = (db.prepare(
         "SELECT source, COUNT(*) as n FROM sessions_meta GROUP BY source"
       ).all() as Array<{ source: string; n: number }>).map(r => ({ source: r.source, count: r.n }));
+
+      // Analytics table stats (may not exist in older DBs — catch silently)
+      try {
+        totalMessages = (db.prepare("SELECT COUNT(*) as n FROM messages").get() as { n: number }).n;
+        totalToolCalls = (db.prepare("SELECT COUNT(*) as n FROM tool_calls").get() as { n: number }).n;
+        topTools = db.prepare(
+          "SELECT tool_name, COUNT(*) as call_count FROM tool_calls GROUP BY tool_name ORDER BY call_count DESC LIMIT 5"
+        ).all() as Array<{ tool_name: string; call_count: number }>;
+      } catch { /* tables may not exist yet */ }
+
       db.close();
     } catch { /* DB might be empty or broken */ }
   }
@@ -488,6 +504,9 @@ export function getStatus(): StatusResult {
     dbSizeBytes,
     totalSessions,
     totalChunks,
+    totalMessages,
+    totalToolCalls,
+    topTools,
     sessionsBySource,
     tools,
     allOk,

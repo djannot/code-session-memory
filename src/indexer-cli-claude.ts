@@ -19,18 +19,16 @@ import type { FullMessage } from "./types";
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /**
- * Returns true if the last meaningful message in the list is a tool result
- * (user message with tool-invocation:result parts only). This indicates the
- * JSONL was read before Claude Code finished writing the final assistant
- * response — we should retry.
+ * Returns true if the transcript does NOT end with an assistant message.
+ * The stop hook fires after the assistant finishes a response, so the
+ * transcript should always end with an assistant message. If it ends with
+ * a user message (plain text or tool results), the JSONL hasn't been fully
+ * flushed yet — we should retry.
  */
-function endsWithToolResult(messages: FullMessage[]): boolean {
+function transcriptIncomplete(messages: FullMessage[]): boolean {
   if (messages.length === 0) return false;
   const last = messages[messages.length - 1];
-  if (last.info.role !== "user") return false;
-  return last.parts.every(
-    (p) => p.type === "tool-invocation" && p.state === "result",
-  );
+  return last.info.role !== "assistant";
 }
 
 async function main() {
@@ -68,7 +66,7 @@ async function main() {
     const MAX_RETRIES = 5;
     const RETRY_DELAY_MS = 500;
 
-    for (let attempt = 0; attempt < MAX_RETRIES && endsWithToolResult(messages); attempt++) {
+    for (let attempt = 0; attempt < MAX_RETRIES && transcriptIncomplete(messages); attempt++) {
       await sleep(RETRY_DELAY_MS);
       messages = parseTranscript(transcriptPath);
     }

@@ -1,6 +1,6 @@
-import type { SessionInfo, FullMessage, SessionSource } from "./types";
+import type { SessionInfo, FullMessage, SessionSource, ToolState, MessageRow, ToolCallRow } from "./types";
 import type { Database } from "./database";
-import { resolveDbPath, openDatabase, getSessionMeta, upsertSessionMeta, insertChunks, deleteSession } from "./database";
+import { resolveDbPath, openDatabase, getSessionMeta, upsertSessionMeta, insertChunks, insertMessages, insertToolCalls, deleteSession } from "./database";
 import { chunkMarkdown } from "./chunker";
 import { createEmbedder } from "./embedder";
 import { messageToMarkdown } from "./session-to-md";
@@ -74,6 +74,87 @@ export async function indexNewMessages(
     }
   }
 
+  // --- Phase 0: extract structured data for analytics tables ---
+  // Process ALL messages (not just new ones) so that sessions indexed before
+  // the analytics tables were added get their messages/tool_calls populated.
+  // INSERT OR IGNORE makes this idempotent — already-indexed rows are skipped.
+  const indexedAt = Date.now();
+  const messageRows: MessageRow[] = [];
+  const toolCallRows: ToolCallRow[] = [];
+
+  for (let i = 0; i < messages.length; i++) {
+    const msg = messages[i];
+    const messageOrder = i;
+    const createdAt = msg.info.time?.created ?? null;
+
+    let textLength = 0;
+    let toolCallCount = 0;
+    for (const part of msg.parts) {
+      if (part.type === "text" && part.text) textLength += part.text.length;
+      if ((part.type === "tool-invocation" && part.toolName !== "tool_result") || part.type === "tool") toolCallCount++;
+    }
+
+    messageRows.push({
+      id: msg.info.id,
+      session_id: sessionId,
+      role: msg.info.role,
+      created_at: createdAt,
+      text_length: textLength,
+      part_count: msg.parts.length,
+      tool_call_count: toolCallCount,
+      message_order: messageOrder,
+      indexed_at: indexedAt,
+    });
+
+    // Extract tool calls from message parts
+    for (const part of msg.parts) {
+      if (part.type === "tool-invocation" && part.toolName !== "tool_result") {
+        // Claude Code, Cursor DB, VS Code, Codex, Gemini format
+        const status = typeof part.state === "string" ? part.state : null;
+        toolCallRows.push({
+          message_id: msg.info.id,
+          session_id: sessionId,
+          tool_name: part.toolName ?? "unknown",
+          tool_call_id: part.toolCallId ?? null,
+          status,
+          has_error: status === "error" ? 1 : 0,
+          args_length: part.args ? JSON.stringify(part.args).length : 0,
+          result_length: part.result
+            ? (typeof part.result === "string" ? part.result.length : JSON.stringify(part.result).length)
+            : 0,
+          created_at: createdAt,
+          indexed_at: indexedAt,
+        });
+      } else if (part.type === "tool") {
+        // OpenCode format — normalize field names
+        const state = part.state as ToolState | undefined;
+        toolCallRows.push({
+          message_id: msg.info.id,
+          session_id: sessionId,
+          tool_name: part.tool ?? "unknown",
+          tool_call_id: part.callID ?? null,
+          status: state?.status ?? null,
+          has_error: state?.error ? 1 : 0,
+          args_length: state?.input ? JSON.stringify(state.input).length : 0,
+          result_length: state?.output
+            ? (typeof state.output === "string" ? state.output.length : JSON.stringify(state.output).length)
+            : 0,
+          created_at: createdAt,
+          indexed_at: indexedAt,
+        });
+      }
+    }
+  }
+
+  // Batch insert structured data.
+  // Messages use INSERT OR IGNORE (idempotent via PK).
+  // Tool calls have no unique constraint, so clear and re-insert for the session.
+  insertMessages(db, messageRows);
+  if (toolCallRows.length > 0) {
+    db.prepare("DELETE FROM tool_calls WHERE session_id = ?").run(sessionId);
+  }
+  insertToolCalls(db, toolCallRows);
+
   if (newMessages.length === 0) {
     return { indexed: 0, skipped: messages.length };
   }
@@ -82,10 +163,6 @@ export async function indexNewMessages(
     apiKey: options.openAiApiKey,
     model: options.embeddingModel,
   });
-
-  // Single timestamp for all chunks in this indexing run — represents when
-  // the session turn was indexed (within seconds of when it was written).
-  const indexedAt = Date.now();
 
   // The first new message's position within the full session (0-based).
   // Used to assign stable message_order values so chunks sort chronologically

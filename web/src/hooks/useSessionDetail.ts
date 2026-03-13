@@ -1,9 +1,17 @@
 import { useState, useEffect } from "react";
-import { getSession, deleteSessionById, type SessionRow, type ChunkRow } from "../api/client";
+import {
+  getSession,
+  deleteSessionById,
+  getSessionAnalytics,
+  type SessionRow,
+  type ChunkRow,
+  type SessionAnalytics,
+} from "../api/client";
 
 export function useSessionDetail(sessionId: string) {
   const [session, setSession] = useState<SessionRow | null>(null);
   const [chunks, setChunks] = useState<ChunkRow[]>([]);
+  const [analytics, setAnalytics] = useState<SessionAnalytics | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -12,9 +20,13 @@ export function useSessionDetail(sessionId: string) {
       setLoading(true);
       setError(null);
       try {
-        const data = await getSession(sessionId);
+        const [data, analyticsData] = await Promise.all([
+          getSession(sessionId),
+          getSessionAnalytics(sessionId).catch(() => null),
+        ]);
         setSession(data.session);
         setChunks(data.chunks);
+        setAnalytics(analyticsData);
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e));
       } finally {
@@ -28,5 +40,5 @@ export function useSessionDetail(sessionId: string) {
     await deleteSessionById(sessionId);
   }
 
-  return { session, chunks, loading, error, deleteSession: deleteCurrentSession };
+  return { session, chunks, analytics, loading, error, deleteSession: deleteCurrentSession };
 }

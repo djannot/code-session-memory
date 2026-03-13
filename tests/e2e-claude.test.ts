@@ -94,9 +94,10 @@ describe("parseTranscript — turn1", () => {
     expect(textPart?.text).toMatch(/list files/i);
   });
 
-  it("includes a tool_use (assistant calls Bash)", () => {
+  it("includes a tool_use (assistant calls Bash) with merged result", () => {
     const hasToolCall = messages.some((m) =>
-      m.parts.some((p) => p.type === "tool-invocation" && p.state === "call"),
+      m.info.role === "assistant" &&
+      m.parts.some((p) => p.type === "tool-invocation" && p.state === "result"),
     );
     expect(hasToolCall).toBe(true);
   });
@@ -122,12 +123,12 @@ describe("parseTranscript — turn1", () => {
     expect(title).toMatch(/list files/i);
   });
 
-  it("tool_result messages have role='tool', not 'user'", () => {
+  it("tool results are merged into assistant messages (no separate tool role)", () => {
     const toolResultMsg = messages.find((m) =>
       m.parts.some((p) => p.type === "tool-invocation" && p.state === "result"),
     );
     expect(toolResultMsg).toBeDefined();
-    expect(toolResultMsg!.info.role).toBe("tool");
+    expect(toolResultMsg!.info.role).toBe("assistant");
   });
 
   it("no tool_result message has role='user'", () => {

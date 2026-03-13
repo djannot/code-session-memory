@@ -191,15 +191,18 @@ function convertAssistantMessage(line: TranscriptAssistantLine): FullMessage | n
         }
         break;
 
-      case "tool_use":
+      case "tool_use": {
+        const result = (block as unknown as Record<string, unknown>)._result as string | undefined;
         parts.push({
           type: "tool-invocation",
           toolName: block.name ?? "unknown",
           toolCallId: block.id,
-          state: "call",
+          state: result !== undefined ? "result" : "call",
           args: block.input,
+          ...(result !== undefined ? { result } : {}),
         });
         break;
+      }
 
       case "thinking":
         // Skip internal reasoning — not useful to index
@@ -325,8 +328,7 @@ export function parseTranscript(transcriptPath: string): FullMessage[] {
           ...finalLine.message,
           content: finalLine.message.content.map((block) => {
             if (block.type === "tool_use" && block.id && toolResults.has(block.id)) {
-              // We'll render the result separately via tool_result user messages
-              // Just keep the call here
+              return { ...block, _result: toolResults.get(block.id) };
             }
             return block;
           }),
@@ -337,10 +339,10 @@ export function parseTranscript(transcriptPath: string): FullMessage[] {
       if (msg) messages.push(msg);
     } else if (line.type === "user") {
       const ul = line as TranscriptUserLine;
-      // Skip tool_result-only messages (already captured in assistant context)
-      // but DO include them so the indexer can see what tools returned
       const msg = convertUserMessage(ul);
-      if (msg) messages.push(msg);
+      // Skip tool_result-only messages — their content is now merged
+      // into the preceding assistant message's tool_use blocks
+      if (msg && msg.info.role !== "tool") messages.push(msg);
     }
   }
 

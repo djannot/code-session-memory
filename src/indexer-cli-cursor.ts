@@ -29,6 +29,7 @@ import {
   openCursorDb,
   getComposerData,
   deriveCursorSessionTitle,
+  cursorSessionToMessages,
 } from "./cursor-to-messages";
 import { cursorTranscriptToMessages } from "./cursor-transcript-to-messages";
 
@@ -74,12 +75,10 @@ async function main() {
     .map((r) => r.replace(/^file:\/\//, ""))
     .filter(Boolean)[0] ?? "";
 
-  // Read messages from the transcript JSONL.
-  // Cursor writes this file synchronously before firing the hook, so it is
-  // always complete — no retry needed.
-  const messages = cursorTranscriptToMessages(transcriptPath, composerId);
+  // Read messages from the transcript JSONL (guaranteed complete at hook time).
+  const transcriptMessages = cursorTranscriptToMessages(transcriptPath, composerId);
 
-  if (messages.length === 0) {
+  if (transcriptMessages.length === 0) {
     process.stderr.write(
       `[code-session-memory] No messages in transcript: ${transcriptPath}\n`,
     );
@@ -90,32 +89,41 @@ async function main() {
   const db = openDatabase({ dbPath });
 
   try {
-    // Derive session title from SQLite (best-effort — don't fail if unavailable)
+    // Try reading richer messages from Cursor's SQLite DB (has tool invocations
+    // + timestamps). The DB may lag behind the transcript by a few seconds, so
+    // we only use DB messages if the count is >= the transcript count.
+    let messages = transcriptMessages;
     const existingMeta = getSessionMeta(db, composerId);
     let title = existingMeta?.session_title ?? "";
 
-    if (!title) {
+    try {
+      const cursorDb = openCursorDb(resolveCursorDbPath());
       try {
-        const cursorDb = openCursorDb(resolveCursorDbPath());
-        try {
+        const dbMessages = cursorSessionToMessages(cursorDb, composerId);
+        if (dbMessages.length >= transcriptMessages.length) {
+          messages = dbMessages;
+        }
+
+        if (!title) {
           const composer = getComposerData(cursorDb, composerId);
           if (composer) {
             title = deriveCursorSessionTitle(composer, messages);
           }
-        } finally {
-          cursorDb.close();
         }
-      } catch {
-        // SQLite unavailable — fall back to first user message text
+      } finally {
+        cursorDb.close();
       }
-      if (!title) {
-        for (const msg of messages) {
-          if (msg.info.role === "user") {
-            const part = msg.parts.find((p) => p.type === "text");
-            if (part && part.type === "text") {
-              title = (part.text ?? "").replace(/\s+/g, " ").trim().slice(0, 80);
-              break;
-            }
+    } catch {
+      // SQLite unavailable — use transcript messages as fallback
+    }
+
+    if (!title) {
+      for (const msg of messages) {
+        if (msg.info.role === "user") {
+          const part = msg.parts.find((p) => p.type === "text");
+          if (part && part.type === "text") {
+            title = (part.text ?? "").replace(/\s+/g, " ").trim().slice(0, 80);
+            break;
           }
         }
       }

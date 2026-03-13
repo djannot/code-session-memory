@@ -141,3 +141,71 @@ export async function getStatus(): Promise<StatusResult> {
   const res = await fetch(`${BASE}/status`);
   return handleResponse(res);
 }
+
+// ---------------------------------------------------------------------------
+// Analytics
+// ---------------------------------------------------------------------------
+
+export interface ToolUsageStat {
+  tool_name: string;
+  call_count: number;
+  error_count: number;
+  session_count: number;
+}
+
+export interface MessageStat {
+  role: string;
+  count: number;
+}
+
+export interface OverviewStats {
+  total_sessions: number;
+  total_messages: number;
+  total_tool_calls: number;
+  earliest_message_at: number | null;
+  latest_message_at: number | null;
+}
+
+export interface SessionAnalytics {
+  session_id: string;
+  message_count: number;
+  tool_call_count: number;
+  approx_duration_ms: number | null;
+  messages_by_role: MessageStat[];
+  tool_breakdown: ToolUsageStat[];
+}
+
+export interface AnalyticsParams {
+  source?: string;
+  from?: string;
+  to?: string;
+}
+
+function analyticsQuery(params?: AnalyticsParams): string {
+  const q = new URLSearchParams();
+  if (params?.source) q.set("source", params.source);
+  if (params?.from) q.set("from", params.from);
+  if (params?.to) q.set("to", params.to);
+  const qs = q.toString();
+  return qs ? "?" + qs : "";
+}
+
+export async function getAnalyticsOverview(params?: AnalyticsParams): Promise<OverviewStats> {
+  const res = await fetch(`${BASE}/analytics/overview${analyticsQuery(params)}`);
+  return handleResponse(res);
+}
+
+export async function getAnalyticsTools(params?: AnalyticsParams): Promise<{ tools: ToolUsageStat[] }> {
+  const res = await fetch(`${BASE}/analytics/tools${analyticsQuery(params)}`);
+  return handleResponse(res);
+}
+
+export async function getAnalyticsMessages(params?: AnalyticsParams): Promise<{ messages: MessageStat[] }> {
+  const res = await fetch(`${BASE}/analytics/messages${analyticsQuery(params)}`);
+  return handleResponse(res);
+}
+
+export async function getSessionAnalytics(id: string): Promise<SessionAnalytics> {
+  const res = await fetch(`${BASE}/analytics/session/${encodeURIComponent(id)}`);
+  return handleResponse(res);
+}

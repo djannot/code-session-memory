@@ -130,13 +130,12 @@ export function chunkMarkdown(
       const level = headingMatch[1].length;
       const title = headingMatch[2].trim();
 
-      // Flush before updating the heading stack
+      // Flush before updating the heading stack.
+      // Always flush at ## and ### boundaries (role / tool boundaries) to keep
+      // tool calls in separate chunks. Only merge small buffers for h4+ headings.
       const tokenCount = countTokens(buffer.join("\n"));
-      if (tokenCount >= MIN_TOKENS) {
+      if (level <= 3 || tokenCount >= MIN_TOKENS) {
         flushBuffer([...headingHierarchy]);
-      } else if (buffer.length > 0) {
-        // Merge small buffer into next section
-        // keep it in buffer
       }
 
       // Update heading hierarchy
@@ -151,13 +150,20 @@ export function chunkMarkdown(
   // Flush remaining
   flushBuffer([...headingHierarchy]);
 
-  // Merge tiny trailing chunks into the previous one
+  // Merge tiny trailing chunks into the previous one, but never merge
+  // tool-boundary chunks (### Tool: headings) — they should stay separate.
   const merged: Array<{ lines: string[]; hierarchy: string[] }> = [];
   for (const chunk of pendingChunks) {
     const tokens = countTokens(chunk.lines.join("\n"));
-    if (tokens < MIN_TOKENS && merged.length > 0) {
+    const isToolChunk = chunk.hierarchy.some((h) => h?.startsWith("Tool:"));
+    if (tokens < MIN_TOKENS && merged.length > 0 && !isToolChunk) {
       const prev = merged[merged.length - 1];
-      prev.lines = [...prev.lines, "", ...chunk.lines];
+      const prevIsToolChunk = prev.hierarchy.some((h) => h?.startsWith("Tool:"));
+      if (!prevIsToolChunk) {
+        prev.lines = [...prev.lines, "", ...chunk.lines];
+      } else {
+        merged.push(chunk);
+      }
     } else {
       merged.push(chunk);
     }

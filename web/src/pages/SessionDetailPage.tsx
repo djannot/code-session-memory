@@ -8,7 +8,7 @@ export default function SessionDetailPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const location = useLocation();
-  const { session, chunks, loading, error, deleteSession } = useSessionDetail(id || "");
+  const { session, chunks, analytics, loading, error, deleteSession } = useSessionDetail(id || "");
   const [showDelete, setShowDelete] = useState(false);
   const [highlightedChunkId, setHighlightedChunkId] = useState<string | null>(null);
 
@@ -74,6 +74,7 @@ export default function SessionDetailPage() {
       <SessionDetail
         session={session}
         chunks={chunks}
+        analytics={analytics}
         onDelete={() => setShowDelete(true)}
         highlightedChunkId={highlightedChunkId}
       />
