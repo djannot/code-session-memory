@@ -177,7 +177,7 @@ async function main() {
       directory: projectDir,
     };
 
-    await indexNewMessages(db, session, messages, "gemini-cli");
+    await indexNewMessages(db, session, messages, "gemini-cli", { transcriptPath });
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
     process.stderr.write(`[code-session-memory] Indexing error: ${msg}\n`);

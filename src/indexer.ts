@@ -16,6 +16,8 @@ export interface IndexerOptions {
   openAiApiKey?: string;
   /** Override the embedding model. Falls back to text-embedding-3-large. */
   embeddingModel?: string;
+  /** Path to the original transcript file. Stored in sessions_meta for re-indexing. */
+  transcriptPath?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -41,7 +43,7 @@ export async function indexNewMessages(
   session: SessionInfo,
   messages: FullMessage[],
   source: SessionSource = "opencode",
-  options: Pick<IndexerOptions, "openAiApiKey" | "embeddingModel"> = {},
+  options: Pick<IndexerOptions, "openAiApiKey" | "embeddingModel" | "transcriptPath"> = {},
 ): Promise<{ indexed: number; skipped: number }> {
   if (messages.length === 0) {
     return { indexed: 0, skipped: 0 };
@@ -223,6 +225,7 @@ export async function indexNewMessages(
     source,
     last_indexed_message_id: lastMsg.info.id,
     updated_at: Date.now(),
+    transcript_path: options.transcriptPath,
   });
 
   // Flush WAL to the main DB file so that a subsequent status check on a

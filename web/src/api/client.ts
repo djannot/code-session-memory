@@ -128,6 +128,51 @@ export async function bulkDeleteSessions(ids: string[]): Promise<{ deleted: numb
   return handleResponse(res);
 }
 
+// ---------------------------------------------------------------------------
+// Reindex
+// ---------------------------------------------------------------------------
+
+export interface ReindexReadySession {
+  id: string;
+  title: string;
+  source: string;
+}
+
+export interface ReindexSkippedSession {
+  id: string;
+  title: string;
+  source: string;
+  reason: string;
+}
+
+export interface ReindexCheckResult {
+  ready: ReindexReadySession[];
+  skipped: ReindexSkippedSession[];
+}
+
+export interface ReindexResult {
+  reindexed: number;
+  failed: Array<{ id: string; reason: string }>;
+}
+
+export async function reindexCheck(ids: string[]): Promise<ReindexCheckResult> {
+  const res = await fetch(`${BASE}/sessions/reindex-check`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ids }),
+  });
+  return handleResponse(res);
+}
+
+export async function bulkReindexSessions(ids: string[]): Promise<ReindexResult> {
+  const res = await fetch(`${BASE}/sessions/bulk-reindex`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ids }),
+  });
+  return handleResponse(res);
+}
+
 export async function purgeOldSessions(days: number): Promise<{ sessions: number; chunks: number }> {
   const res = await fetch(`${BASE}/sessions/purge`, {
     method: "POST",

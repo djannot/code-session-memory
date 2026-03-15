@@ -36,6 +36,7 @@ export interface SessionMeta {
   source: SessionSource;
   last_indexed_message_id: string | null;
   updated_at: number;
+  transcript_path?: string | null;
 }
 
 /**

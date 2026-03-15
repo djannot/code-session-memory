@@ -1,5 +1,15 @@
 import { useState, useEffect, useCallback } from "react";
-import { getSessions, deleteSessionById, bulkDeleteSessions, purgeOldSessions, type SessionRow } from "../api/client";
+import {
+  getSessions,
+  deleteSessionById,
+  bulkDeleteSessions,
+  purgeOldSessions,
+  reindexCheck,
+  bulkReindexSessions,
+  type SessionRow,
+  type ReindexCheckResult,
+  type ReindexResult,
+} from "../api/client";
 
 export function useSessions() {
   const [sessions, setSessions] = useState<SessionRow[]>([]);
@@ -41,5 +51,15 @@ export function useSessions() {
     return result;
   }
 
-  return { sessions, loading, error, filters, setFilters, deleteSession, bulkDelete, purgeSessions, refresh: fetchSessions };
+  async function checkReindex(ids: string[]): Promise<ReindexCheckResult> {
+    return reindexCheck(ids);
+  }
+
+  async function bulkReindex(ids: string[]): Promise<ReindexResult> {
+    const result = await bulkReindexSessions(ids);
+    await fetchSessions();
+    return result;
+  }
+
+  return { sessions, loading, error, filters, setFilters, deleteSession, bulkDelete, purgeSessions, checkReindex, bulkReindex, refresh: fetchSessions };
 }

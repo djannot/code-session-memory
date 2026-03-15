@@ -6,6 +6,9 @@
  */
 
 import { Router, Request, Response } from "express";
+import fs from "fs";
+import path from "path";
+import os from "os";
 import {
   resolveDbPath,
   openDatabase,
@@ -21,10 +24,18 @@ import {
   getMessageStats,
   getOverviewStats,
   getSessionAnalytics,
+  getSessionMeta,
+  upsertSessionMeta,
 } from "../database";
 import { createEmbedder } from "../embedder";
+import { indexNewMessages } from "../indexer";
 import { getStatus } from "../status";
-import type { SessionSource, AnalyticsFilter } from "../types";
+import type { SessionSource, SessionMeta, AnalyticsFilter } from "../types";
+import { parseTranscript, deriveSessionTitle } from "../transcript-to-messages";
+import { cursorTranscriptToMessages } from "../cursor-transcript-to-messages";
+import { parseVscodeTranscript } from "../vscode-transcript-to-messages";
+import { codexSessionToMessages, deriveCodexSessionTitle } from "../codex-session-to-messages";
+import { geminiSessionToMessages, deriveGeminiSessionTitle } from "../gemini-session-to-messages";
 
 // ---------------------------------------------------------------------------
 // DB helper
@@ -81,6 +92,137 @@ function parseAnalyticsFilter(req: Request): AnalyticsFilter {
     if (ms !== null) filter.toMs = ms;
   }
   return filter;
+}
+
+// ---------------------------------------------------------------------------
+// Transcript path discovery (for re-indexing sessions without a stored path)
+// ---------------------------------------------------------------------------
+
+function discoverClaudeTranscript(sessionId: string): string | null {
+  const claudeDir = path.join(os.homedir(), ".claude", "projects");
+  if (!fs.existsSync(claudeDir)) return null;
+  try {
+    for (const project of fs.readdirSync(claudeDir)) {
+      const candidate = path.join(claudeDir, project, `${sessionId}.jsonl`);
+      if (fs.existsSync(candidate)) return candidate;
+    }
+  } catch { /* ignore */ }
+  return null;
+}
+
+function discoverCodexTranscript(threadId: string): string | null {
+  const sessionsDir = path.join(
+    process.env.CODEX_HOME ?? path.join(os.homedir(), ".codex"),
+    "sessions",
+  );
+  if (!fs.existsSync(sessionsDir)) return null;
+
+  const matches: { path: string; mtime: number }[] = [];
+  function walk(dir: string): void {
+    let entries: fs.Dirent[];
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    for (const entry of entries) {
+      const fullPath = path.join(dir, entry.name);
+      if (entry.isDirectory()) walk(fullPath);
+      else if (entry.isFile() && entry.name.endsWith(`-${threadId}.jsonl`)) {
+        let mtime = 0;
+        try { mtime = fs.statSync(fullPath).mtimeMs; } catch { /* ignore */ }
+        matches.push({ path: fullPath, mtime });
+      }
+    }
+  }
+  walk(sessionsDir);
+  if (matches.length === 0) return null;
+  matches.sort((a, b) => b.mtime - a.mtime);
+  return matches[0].path;
+}
+
+function discoverGeminiTranscript(sessionId: string): string | null {
+  const tmpRoot = path.join(
+    process.env.GEMINI_CONFIG_DIR ?? path.join(os.homedir(), ".gemini"),
+    "tmp",
+  );
+  if (!fs.existsSync(tmpRoot)) return null;
+
+  const files: { path: string; mtime: number }[] = [];
+  function walk(dir: string): void {
+    let entries: fs.Dirent[];
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    for (const entry of entries) {
+      const fullPath = path.join(dir, entry.name);
+      if (entry.isDirectory()) walk(fullPath);
+      else if (entry.isFile() && entry.name.startsWith("session-") && entry.name.endsWith(".json")) {
+        let mtime = 0;
+        try { mtime = fs.statSync(fullPath).mtimeMs; } catch { /* ignore */ }
+        files.push({ path: fullPath, mtime });
+      }
+    }
+  }
+  walk(tmpRoot);
+  files.sort((a, b) => b.mtime - a.mtime);
+
+  for (const { path: filePath } of files.slice(0, 200)) {
+    try {
+      const parsed = JSON.parse(fs.readFileSync(filePath, "utf8")) as {
+        sessionId?: string; session_id?: string;
+      };
+      if ((parsed.sessionId ?? parsed.session_id) === sessionId) return filePath;
+    } catch { /* ignore */ }
+  }
+  return null;
+}
+
+function resolveTranscriptPath(meta: SessionMeta): string | null {
+  // Try stored path first
+  if (meta.transcript_path && fs.existsSync(meta.transcript_path)) {
+    return meta.transcript_path;
+  }
+  // Fall back to source-specific discovery
+  switch (meta.source) {
+    case "claude-code": return discoverClaudeTranscript(meta.session_id);
+    case "codex": return discoverCodexTranscript(meta.session_id);
+    case "gemini-cli": return discoverGeminiTranscript(meta.session_id);
+    default: return null;
+  }
+}
+
+interface ReindexCheckResult {
+  ready: Array<{ id: string; title: string; source: SessionSource }>;
+  skipped: Array<{ id: string; title: string; source: SessionSource; reason: string }>;
+}
+
+function checkReindexability(
+  db: ReturnType<typeof openDatabase>,
+  ids: string[],
+): ReindexCheckResult {
+  const result: ReindexCheckResult = { ready: [], skipped: [] };
+
+  for (const id of ids) {
+    const meta = getSessionMeta(db, id);
+    if (!meta) {
+      result.skipped.push({ id, title: id, source: "opencode", reason: "Session not found in database" });
+      continue;
+    }
+    const info = { id, title: meta.session_title, source: meta.source };
+
+    if (meta.source === "opencode") {
+      result.skipped.push({ ...info, reason: "OpenCode sessions use internal DB, cannot reindex from transcript" });
+      continue;
+    }
+
+    const transcriptPath = resolveTranscriptPath(meta);
+    if (!transcriptPath) {
+      const hint = meta.source === "cursor" || meta.source === "vscode"
+        ? "Transcript file not available (temporary files are deleted after the session)"
+        : "Transcript file not found";
+      result.skipped.push({ ...info, reason: hint });
+      continue;
+    }
+
+    result.ready.push(info);
+  }
+
+  return result;
 }
 
 // ---------------------------------------------------------------------------
@@ -252,6 +394,107 @@ export function createApiRouter(): Router {
       });
 
       res.json({ deleted });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      res.status(500).json({ error: message });
+    }
+  });
+
+  // POST /api/sessions/reindex-check — dry run: which sessions can be reindexed?
+  router.post("/sessions/reindex-check", (req: Request, res: Response) => {
+    try {
+      const { ids } = req.body;
+      if (!Array.isArray(ids) || ids.length === 0 || !ids.every((id: unknown) => typeof id === "string")) {
+        res.status(400).json({ error: "ids must be a non-empty array of strings" });
+        return;
+      }
+
+      const result = withDb((db) => checkReindexability(db, ids));
+      res.json(result);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      res.status(500).json({ error: message });
+    }
+  });
+
+  // POST /api/sessions/bulk-reindex — reindex sessions from their transcript files
+  router.post("/sessions/bulk-reindex", async (req: Request, res: Response) => {
+    try {
+      const { ids } = req.body;
+      if (!Array.isArray(ids) || ids.length === 0 || !ids.every((id: unknown) => typeof id === "string")) {
+        res.status(400).json({ error: "ids must be a non-empty array of strings" });
+        return;
+      }
+
+      if (!process.env.OPENAI_API_KEY) {
+        res.status(500).json({ error: "OPENAI_API_KEY environment variable is not set — required for embedding" });
+        return;
+      }
+
+      let reindexed = 0;
+      const failed: Array<{ id: string; reason: string }> = [];
+
+      // Process sequentially to avoid overwhelming the embedding API
+      for (const id of ids) {
+        try {
+          const dbPath = resolveDbPath();
+          const db = openDatabase({ dbPath });
+          try {
+            const meta = getSessionMeta(db, id);
+            if (!meta) { failed.push({ id, reason: "Session not found" }); continue; }
+
+            const transcriptPath = resolveTranscriptPath(meta);
+            if (!transcriptPath) { failed.push({ id, reason: "Transcript not available" }); continue; }
+
+            // Parse transcript based on source
+            let messages;
+            let title = meta.session_title;
+            switch (meta.source) {
+              case "claude-code":
+                messages = parseTranscript(transcriptPath);
+                if (!title) title = deriveSessionTitle(messages);
+                break;
+              case "cursor":
+                messages = cursorTranscriptToMessages(transcriptPath, id);
+                break;
+              case "vscode":
+                messages = parseVscodeTranscript(transcriptPath);
+                break;
+              case "codex":
+                messages = codexSessionToMessages(transcriptPath);
+                if (!title) title = deriveCodexSessionTitle(messages);
+                break;
+              case "gemini-cli":
+                messages = geminiSessionToMessages(transcriptPath);
+                if (!title) title = deriveGeminiSessionTitle(messages, id);
+                break;
+              default:
+                failed.push({ id, reason: `Source "${meta.source}" cannot be reindexed` });
+                continue;
+            }
+
+            if (!messages || messages.length === 0) {
+              failed.push({ id, reason: "Transcript parsed but produced no messages" });
+              continue;
+            }
+
+            // Safe: parse succeeded, now delete old data and re-index
+            deleteSession(db, id);
+
+            const session = { id, title, directory: meta.project };
+            await indexNewMessages(db, session, messages, meta.source, { transcriptPath });
+
+            reindexed++;
+          } finally {
+            db.close();
+          }
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          failed.push({ id, reason: msg });
+        }
+      }
+
+      res.json({ reindexed, failed });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       res.status(500).json({ error: message });

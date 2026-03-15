@@ -176,6 +176,8 @@ describe("createToolHandlers", () => {
         undefined,
         undefined,
         undefined,
+        undefined,
+        undefined,
       );
     });
 
@@ -196,6 +198,8 @@ describe("createToolHandlers", () => {
         expect.any(Number),
         undefined,
         "gemini-cli",
+        undefined,
+        undefined,
         undefined,
         undefined,
       );
@@ -219,6 +223,33 @@ describe("createToolHandlers", () => {
         undefined,
         fromMs,
         toMs,
+        undefined,
+        undefined,
+      );
+    });
+
+    it("passes includeSections and excludeSections to querySessions", async () => {
+      const querySessions = vi.fn().mockResolvedValue([]);
+      const handlers = createToolHandlers({
+        createEmbedding: mockEmbedding,
+        querySessions,
+        querySessionsHybrid: vi.fn().mockResolvedValue([]),
+        getSessionChunks: vi.fn().mockResolvedValue([]),
+      });
+      await handlers.querySessionsHandler({
+        queryText: "test",
+        includeSections: "User,Assistant",
+        excludeSections: "Tool",
+      });
+      expect(querySessions).toHaveBeenCalledWith(
+        expect.any(Array),
+        expect.any(Number),
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        ["User", "Assistant"],
+        ["Tool"],
       );
     });
 

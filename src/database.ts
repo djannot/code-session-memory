@@ -200,6 +200,13 @@ export function initSchema(db: Database, embeddingDimension = DEFAULT_EMBEDDING_
     // Column already exists — ignore
   }
 
+  // Migrate existing DBs: add transcript_path column if missing
+  try {
+    db.exec(`ALTER TABLE sessions_meta ADD COLUMN transcript_path TEXT`);
+  } catch {
+    // Column already exists — ignore
+  }
+
   // Structured analytics tables
   db.exec(`
     CREATE TABLE IF NOT EXISTS messages (
@@ -252,14 +259,15 @@ export function getSessionMeta(db: Database, sessionId: string): SessionMeta | n
 
 export function upsertSessionMeta(db: Database, meta: SessionMeta): void {
   db.prepare(`
-    INSERT INTO sessions_meta (session_id, session_title, project, source, last_indexed_message_id, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?)
+    INSERT INTO sessions_meta (session_id, session_title, project, source, last_indexed_message_id, updated_at, transcript_path)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(session_id) DO UPDATE SET
       session_title           = excluded.session_title,
       project                 = excluded.project,
       source                  = excluded.source,
       last_indexed_message_id = excluded.last_indexed_message_id,
-      updated_at              = excluded.updated_at
+      updated_at              = excluded.updated_at,
+      transcript_path         = COALESCE(excluded.transcript_path, sessions_meta.transcript_path)
   `).run(
     meta.session_id,
     meta.session_title,
@@ -267,6 +275,7 @@ export function upsertSessionMeta(db: Database, meta: SessionMeta): void {
     meta.source,
     meta.last_indexed_message_id,
     meta.updated_at,
+    meta.transcript_path ?? null,
   );
 }
 
@@ -398,6 +407,41 @@ export function insertToolCalls(db: Database, rows: ToolCallRow[]): void {
 // Query helpers (used by MCP server)
 // ---------------------------------------------------------------------------
 
+export interface SectionFilterOptions {
+  /** Single prefix (backward compat). Matches LOWER(section) LIKE prefix%. */
+  sectionFilter?: string;
+  /** Include only chunks whose section matches one of these prefixes. */
+  includeSections?: string[];
+  /** Exclude chunks whose section matches any of these prefixes. */
+  excludeSections?: string[];
+}
+
+function appendSectionFilters(
+  sql: string,
+  params: unknown[],
+  col: string,
+  opts: SectionFilterOptions,
+): string {
+  if (opts.sectionFilter) {
+    sql += ` AND LOWER(${col}) LIKE ?`;
+    params.push(opts.sectionFilter.toLowerCase() + "%");
+  }
+  if (opts.includeSections && opts.includeSections.length > 0) {
+    const clauses = opts.includeSections.map(() => `LOWER(${col}) LIKE ?`);
+    sql += ` AND (${clauses.join(" OR ")})`;
+    for (const prefix of opts.includeSections) {
+      params.push(prefix.toLowerCase() + "%");
+    }
+  }
+  if (opts.excludeSections && opts.excludeSections.length > 0) {
+    for (const prefix of opts.excludeSections) {
+      sql += ` AND LOWER(${col}) NOT LIKE ?`;
+      params.push(prefix.toLowerCase() + "%");
+    }
+  }
+  return sql;
+}
+
 export function queryByEmbedding(
   db: Database,
   queryEmbedding: number[],
@@ -407,10 +451,16 @@ export function queryByEmbedding(
   fromMs?: number,
   toMs?: number,
   sectionFilter?: string,
+  sectionOpts?: SectionFilterOptions,
 ): QueryResult[] {
   // sqlite-vec requires the LIMIT (k) constraint to be part of the KNN WHERE
   // clause. We use a CTE to perform the KNN first, then join sessions_meta for
   // the source column and apply optional post-filters.
+  // When section filters are active, over-fetch from KNN so that after post-
+  // filtering we still have enough results to fill the requested topK.
+  const hasSectionFilter = !!(sectionFilter || sectionOpts?.includeSections?.length || sectionOpts?.excludeSections?.length);
+  const knnK = hasSectionFilter ? topK * 5 : topK;
+
   let sql = `
     WITH knn AS (
       SELECT
@@ -426,7 +476,7 @@ export function queryByEmbedding(
     LEFT JOIN sessions_meta m ON knn.session_id = m.session_id
     WHERE 1=1
   `;
-  const params: unknown[] = [new Float32Array(queryEmbedding), topK];
+  const params: unknown[] = [new Float32Array(queryEmbedding), knnK];
 
   if (projectFilter) {
     sql += " AND knn.project = ?";
@@ -448,18 +498,18 @@ export function queryByEmbedding(
     params.push(BigInt(toMs));
   }
 
-  if (sectionFilter) {
-    sql += " AND LOWER(knn.section) LIKE ?";
-    params.push(sectionFilter.toLowerCase() + "%");
-  }
+  // Section filtering (backward compat single prefix + new multi-prefix options)
+  sql = appendSectionFilters(sql, params, "knn.section", { sectionFilter, ...sectionOpts });
 
   sql += " ORDER BY distance";
 
-  const rows = db.prepare(sql).all(...params) as QueryResult[];
+  let rows = db.prepare(sql).all(...params) as QueryResult[];
   // Strip raw embedding bytes from results
   rows.forEach((r: unknown) => {
     if (r && typeof r === "object") delete (r as Record<string, unknown>)["embedding"];
   });
+  // Truncate to requested topK after post-filtering
+  if (rows.length > topK) rows = rows.slice(0, topK);
   return rows;
 }
 
@@ -476,6 +526,7 @@ export function queryByKeyword(
   fromMs?: number,
   toMs?: number,
   sectionFilter?: string,
+  sectionOpts?: SectionFilterOptions,
 ): QueryResult[] {
   // Escape FTS5 special characters and wrap terms for prefix matching
   const sanitized = queryText.replace(/['"*(){}[\]:^~!\\]/g, " ").trim();
@@ -510,10 +561,7 @@ export function queryByKeyword(
     sql += " AND v.created_at <= ?";
     params.push(BigInt(toMs));
   }
-  if (sectionFilter) {
-    sql += " AND LOWER(v.section) LIKE ?";
-    params.push(sectionFilter.toLowerCase() + "%");
-  }
+  sql = appendSectionFilters(sql, params, "v.section", { sectionFilter, ...sectionOpts });
 
   sql += ` ORDER BY rank LIMIT ?`;
   params.push(topK);
@@ -547,14 +595,15 @@ export function queryHybrid(
   fromMs?: number,
   toMs?: number,
   sectionFilter?: string,
+  sectionOpts?: SectionFilterOptions,
 ): QueryResult[] {
   const overFetch = topK * 3;
 
   const vectorResults = queryByEmbedding(
-    db, queryEmbedding, overFetch, projectFilter, sourceFilter, fromMs, toMs, sectionFilter,
+    db, queryEmbedding, overFetch, projectFilter, sourceFilter, fromMs, toMs, sectionFilter, sectionOpts,
   );
   const keywordResults = queryByKeyword(
-    db, queryText, overFetch, projectFilter, sourceFilter, fromMs, toMs, sectionFilter,
+    db, queryText, overFetch, projectFilter, sourceFilter, fromMs, toMs, sectionFilter, sectionOpts,
   );
 
   // RRF constant (standard value)

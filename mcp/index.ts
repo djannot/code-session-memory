@@ -96,6 +96,8 @@ const querySessionsSchema = {
   fromDate: z.string().optional().describe("Return only chunks indexed on or after this date. ISO 8601 format, e.g. '2026-02-01' or '2026-02-20T15:00:00Z'. Optional."),
   toDate: z.string().optional().describe("Return only chunks indexed on or before this date. ISO 8601 format, e.g. '2026-02-20'. A date-only value is treated as end-of-day UTC. Optional."),
   hybrid: z.boolean().optional().describe("Enable hybrid search (semantic + keyword with RRF merging). Default false (semantic only). Use when searching for exact terms or code identifiers."),
+  includeSections: z.string().optional().describe("Comma-separated section prefixes to include (e.g. 'User,Assistant'). Only chunks whose section matches one of these prefixes are returned. Optional."),
+  excludeSections: z.string().optional().describe("Comma-separated section prefixes to exclude (e.g. 'Tool,Tool Result'). Chunks matching any of these prefixes are skipped. Optional."),
 };
 
 const getSessionChunksSchema = {
@@ -112,7 +114,7 @@ serverAny.tool(
   "query_sessions",
   "Semantically search across all indexed sessions stored in the vector database. Returns the most relevant chunks from past sessions. Sessions from OpenCode, Claude Code, Cursor, VS Code, Codex, and Gemini CLI are indexed into the same shared database.",
   querySessionsSchema,
-  async (args: { queryText: string; project?: string; source?: string; limit?: number; fromDate?: string; toDate?: string; hybrid?: boolean }) => {
+  async (args: { queryText: string; project?: string; source?: string; limit?: number; fromDate?: string; toDate?: string; hybrid?: boolean; includeSections?: string; excludeSections?: string }) => {
     // Parse ISO 8601 date strings into unix milliseconds.
     // For toDate, a date-only string (no time component) is treated as end-of-day UTC
     // by adding 86399999ms (23:59:59.999).
@@ -129,7 +131,7 @@ serverAny.tool(
         toMs = args.toDate.includes("T") ? t : t + 86399999;
       }
     }
-    return querySessionsHandler({ ...args, limit: args.limit ?? 5, fromMs, toMs });
+    return querySessionsHandler({ ...args, limit: args.limit ?? 5, fromMs, toMs, includeSections: args.includeSections, excludeSections: args.excludeSections });
   },
 );
 

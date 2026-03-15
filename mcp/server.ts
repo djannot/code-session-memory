@@ -29,6 +29,33 @@ type SqliteStatement = {
 type FsModule = { existsSync: (p: string) => boolean };
 
 // ---------------------------------------------------------------------------
+// Section filter helper
+// ---------------------------------------------------------------------------
+
+function appendSectionFilters(
+  sql: string,
+  params: unknown[],
+  col: string,
+  includeSections?: string[],
+  excludeSections?: string[],
+): string {
+  if (includeSections && includeSections.length > 0) {
+    const clauses = includeSections.map(() => `LOWER(${col}) LIKE ?`);
+    sql += ` AND (${clauses.join(" OR ")})`;
+    for (const prefix of includeSections) {
+      params.push(prefix.toLowerCase() + "%");
+    }
+  }
+  if (excludeSections && excludeSections.length > 0) {
+    for (const prefix of excludeSections) {
+      sql += ` AND LOWER(${col}) NOT LIKE ?`;
+      params.push(prefix.toLowerCase() + "%");
+    }
+  }
+  return sql;
+}
+
+// ---------------------------------------------------------------------------
 // Provider factory
 // ---------------------------------------------------------------------------
 
@@ -65,8 +92,15 @@ export function createSqliteProvider(deps: {
     sourceFilter?: string,
     fromMs?: number,
     toMs?: number,
+    includeSections?: string[],
+    excludeSections?: string[],
   ): Promise<QueryResult[]> {
     return withDb((db) => {
+      // Over-fetch from KNN when section filters are active so post-filtering
+      // still yields enough results to fill the requested topK.
+      const hasSectionFilter = !!(includeSections?.length || excludeSections?.length);
+      const knnK = hasSectionFilter ? topK * 5 : topK;
+
       let sql = `
         WITH knn AS (
           SELECT
@@ -82,7 +116,7 @@ export function createSqliteProvider(deps: {
         LEFT JOIN sessions_meta m ON knn.session_id = m.session_id
         WHERE 1=1
       `;
-      const params: unknown[] = [new Float32Array(queryEmbedding), topK];
+      const params: unknown[] = [new Float32Array(queryEmbedding), knnK];
 
       if (projectFilter) {
         sql += " AND knn.project = ?";
@@ -104,12 +138,16 @@ export function createSqliteProvider(deps: {
         params.push(BigInt(toMs));
       }
 
+      sql = appendSectionFilters(sql, params, "knn.section", includeSections, excludeSections);
+
       sql += " ORDER BY distance";
 
-      const rows = db.prepare(sql).all(...params) as QueryResult[];
+      let rows = db.prepare(sql).all(...params) as QueryResult[];
       rows.forEach((r) => {
         delete (r as unknown as Record<string, unknown>)["embedding"];
       });
+      // Truncate to requested topK after post-filtering
+      if (rows.length > topK) rows = rows.slice(0, topK);
       return rows;
     });
   }
@@ -123,6 +161,8 @@ export function createSqliteProvider(deps: {
     sourceFilter?: string,
     fromMs?: number,
     toMs?: number,
+    includeSections?: string[],
+    excludeSections?: string[],
   ): QueryResult[] {
     return withDb((db) => {
       const sanitized = queryText.replace(/['"*(){}[\]:^~!\\]/g, " ").trim();
@@ -158,6 +198,8 @@ export function createSqliteProvider(deps: {
         params.push(BigInt(toMs));
       }
 
+      sql = appendSectionFilters(sql, params, "v.section", includeSections, excludeSections);
+
       sql += " ORDER BY rank LIMIT ?";
       params.push(topK);
 
@@ -184,14 +226,16 @@ export function createSqliteProvider(deps: {
     sourceFilter?: string,
     fromMs?: number,
     toMs?: number,
+    includeSections?: string[],
+    excludeSections?: string[],
   ): Promise<QueryResult[]> {
     const overFetch = topK * 3;
 
     const vectorResults = await querySessions(
-      queryEmbedding, overFetch, projectFilter, sourceFilter, fromMs, toMs,
+      queryEmbedding, overFetch, projectFilter, sourceFilter, fromMs, toMs, includeSections, excludeSections,
     );
     const keywordResults = queryKeyword(
-      queryText, overFetch, projectFilter, sourceFilter, fromMs, toMs,
+      queryText, overFetch, projectFilter, sourceFilter, fromMs, toMs, includeSections, excludeSections,
     );
 
     const K = 60;
@@ -264,6 +308,8 @@ export function createToolHandlers(deps: {
     source?: string,
     fromMs?: number,
     toMs?: number,
+    includeSections?: string[],
+    excludeSections?: string[],
   ) => Promise<QueryResult[]>;
   querySessionsHybrid: (
     embedding: number[],
@@ -273,6 +319,8 @@ export function createToolHandlers(deps: {
     source?: string,
     fromMs?: number,
     toMs?: number,
+    includeSections?: string[],
+    excludeSections?: string[],
   ) => Promise<QueryResult[]>;
   getSessionChunks: (
     url: string,
@@ -292,18 +340,26 @@ export function createToolHandlers(deps: {
     fromMs?: number;
     toMs?: number;
     hybrid?: boolean;
+    includeSections?: string;
+    excludeSections?: string;
   }) => {
     const limit = args.limit ?? 5;
     const useHybrid = args.hybrid === true;
+    const includeSections = args.includeSections
+      ? args.includeSections.split(",").map((s) => s.trim()).filter(Boolean)
+      : undefined;
+    const excludeSections = args.excludeSections
+      ? args.excludeSections.split(",").map((s) => s.trim()).filter(Boolean)
+      : undefined;
     console.error(
-      `[query_sessions] text="${args.queryText}" project="${args.project ?? "any"}" source="${args.source ?? "any"}" limit=${limit} hybrid=${useHybrid}`,
+      `[query_sessions] text="${args.queryText}" project="${args.project ?? "any"}" source="${args.source ?? "any"}" limit=${limit} hybrid=${useHybrid} include=${includeSections ?? "all"} exclude=${excludeSections ?? "none"}`,
     );
 
     try {
       const embedding = await createEmbedding(args.queryText);
       const results = useHybrid
-        ? await querySessionsHybrid(embedding, args.queryText, limit, args.project, args.source, args.fromMs, args.toMs)
-        : await querySessions(embedding, limit, args.project, args.source, args.fromMs, args.toMs);
+        ? await querySessionsHybrid(embedding, args.queryText, limit, args.project, args.source, args.fromMs, args.toMs, includeSections, excludeSections)
+        : await querySessions(embedding, limit, args.project, args.source, args.fromMs, args.toMs, includeSections, excludeSections);
 
       if (results.length === 0) {
         return {
