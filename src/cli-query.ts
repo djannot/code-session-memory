@@ -15,9 +15,10 @@
  * Requires OPENAI_API_KEY environment variable for embedding generation.
  */
 
-import { resolveDbPath, openDatabase, queryByEmbedding, queryHybrid } from "./database";
 import { createEmbedder } from "./embedder";
 import type { SessionSource, QueryResult } from "./types";
+import { resolveBackendConfig } from "./config";
+import { createProvider } from "./providers";
 
 // ---------------------------------------------------------------------------
 // ANSI helpers
@@ -195,9 +196,8 @@ export async function cmdQuery(args: string[]): Promise<void> {
     return; // guard for test environments where process.exit is mocked
   }
 
-  // 3. Open DB
-  const dbPath = resolveDbPath();
-  const db = openDatabase({ dbPath });
+  // 3. Open provider
+  const provider = await createProvider(resolveBackendConfig());
 
   try {
     // 4. Embed the query
@@ -205,26 +205,10 @@ export async function cmdQuery(args: string[]): Promise<void> {
     const embedding = await embedder.embedText(opts.queryText);
 
     // 5. Search
+    const filters = { sourceFilter: opts.source, fromMs: opts.fromMs, toMs: opts.toMs };
     const results = opts.hybrid
-      ? queryHybrid(
-          db,
-          embedding,
-          opts.queryText,
-          opts.limit,
-          undefined, // no project filter
-          opts.source,
-          opts.fromMs,
-          opts.toMs,
-        )
-      : queryByEmbedding(
-          db,
-          embedding,
-          opts.limit,
-          undefined, // no project filter
-          opts.source,
-          opts.fromMs,
-          opts.toMs,
-        );
+      ? await provider.queryHybrid(embedding, opts.queryText, opts.limit, filters)
+      : await provider.queryByEmbedding(embedding, opts.limit, filters);
 
     // 6. Print results
     if (results.length === 0) {
@@ -255,6 +239,6 @@ export async function cmdQuery(args: string[]): Promise<void> {
       console.log();
     }
   } finally {
-    db.close();
+    await provider.close();
   }
 }

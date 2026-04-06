@@ -22,7 +22,6 @@
  * No retries needed: the transcript file is the authoritative source.
  */
 
-import { resolveDbPath, openDatabase, getSessionMeta } from "./database";
 import { indexNewMessages } from "./indexer";
 import {
   resolveCursorDbPath,
@@ -32,6 +31,8 @@ import {
   cursorSessionToMessages,
 } from "./cursor-to-messages";
 import { cursorTranscriptToMessages } from "./cursor-transcript-to-messages";
+import { resolveBackendConfig } from "./config";
+import { createProvider } from "./providers";
 
 async function main() {
   // Read JSON payload from stdin
@@ -85,15 +86,14 @@ async function main() {
     return;
   }
 
-  const dbPath = resolveDbPath();
-  const db = openDatabase({ dbPath });
+  const provider = await createProvider(resolveBackendConfig());
 
   try {
     // Try reading richer messages from Cursor's SQLite DB (has tool invocations
     // + timestamps). The DB may lag behind the transcript by a few seconds, so
     // we only use DB messages if the count is >= the transcript count.
     let messages = transcriptMessages;
-    const existingMeta = getSessionMeta(db, composerId);
+    const existingMeta = await provider.getSessionMeta(composerId);
     let title = existingMeta?.session_title ?? "";
 
     try {
@@ -135,12 +135,12 @@ async function main() {
       directory: projectDir,
     };
 
-    await indexNewMessages(db, session, messages, "cursor", { transcriptPath: transcriptPath ?? undefined });
+    await indexNewMessages(provider, session, messages, "cursor", { transcriptPath: transcriptPath ?? undefined });
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
     process.stderr.write(`[code-session-memory] Indexing error: ${msg}\n`);
   } finally {
-    db.close();
+    await provider.close();
   }
 }
 

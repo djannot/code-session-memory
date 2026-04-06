@@ -9,7 +9,6 @@
  * new messages into the shared sqlite-vec DB.
  */
 
-import { resolveDbPath, openDatabase, getSessionMeta } from "./database";
 import { indexNewMessages } from "./indexer";
 import {
   geminiSessionToMessages,
@@ -18,6 +17,8 @@ import {
 import fs from "fs";
 import os from "os";
 import path from "path";
+import { resolveBackendConfig } from "./config";
+import { createProvider } from "./providers";
 
 interface GeminiHookPayload {
   sessionId?: string;
@@ -161,14 +162,13 @@ async function main() {
     return;
   }
 
-  const dbPath = resolveDbPath();
-  const db = openDatabase({ dbPath });
+  const provider = await createProvider(resolveBackendConfig());
 
   try {
     const messages = geminiSessionToMessages(transcriptPath);
     if (messages.length === 0) return;
 
-    const existingMeta = getSessionMeta(db, sessionId);
+    const existingMeta = await provider.getSessionMeta(sessionId);
     const title = existingMeta?.session_title || deriveGeminiSessionTitle(messages, sessionId);
 
     const session = {
@@ -177,12 +177,12 @@ async function main() {
       directory: projectDir,
     };
 
-    await indexNewMessages(db, session, messages, "gemini-cli", { transcriptPath });
+    await indexNewMessages(provider, session, messages, "gemini-cli", { transcriptPath });
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
     process.stderr.write(`[code-session-memory] Indexing error: ${msg}\n`);
   } finally {
-    db.close();
+    await provider.close();
   }
 }
 

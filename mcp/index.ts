@@ -9,24 +9,24 @@
  * Environment variables:
  *   OPENAI_API_KEY           — required for embedding generation
  *   OPENAI_MODEL             — embedding model (default: text-embedding-3-large)
- *   OPENCODE_MEMORY_DB_PATH  — path to the sqlite-vec DB
+ *   OPENCODE_MEMORY_DB_PATH  — path to the sqlite-vec DB (SQLite backend)
+ *   CSM_BACKEND              — "sqlite" (default) or "postgres"
+ *   CSM_POSTGRES_URL         — PostgreSQL connection string (when backend=postgres)
  */
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import { OpenAI } from "openai";
-import * as sqliteVec from "sqlite-vec";
-import Database from "better-sqlite3";
-import fs from "fs";
-import { resolveDbPath } from "../src/database";
-import { createSqliteProvider, createToolHandlers } from "./server";
+import { resolveBackendConfig } from "../src/config";
+import { createProvider } from "../src/providers";
+import type { DatabaseProvider } from "../src/providers";
+import { createToolHandlers } from "./server";
 
 // ---------------------------------------------------------------------------
 // Configuration
 // ---------------------------------------------------------------------------
 
-const dbPath = resolveDbPath();
 const openAiModel = process.env.OPENAI_MODEL ?? "text-embedding-3-large";
 
 // ---------------------------------------------------------------------------
@@ -59,24 +59,55 @@ async function createEmbedding(text: string): Promise<number[]> {
 }
 
 // ---------------------------------------------------------------------------
-// SQLite provider + tool handlers
+// Provider-based query functions
 // ---------------------------------------------------------------------------
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-const provider = createSqliteProvider({
-  dbPath,
-  sqliteVec: sqliteVec as unknown as { load: (db: unknown) => void },
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  Database: Database as unknown as any,
-  fs,
-});
+function createProviderQueryFunctions(provider: DatabaseProvider) {
+  return {
+    async querySessions(
+      embedding: number[],
+      topK: number,
+      project?: string,
+      source?: string,
+      fromMs?: number,
+      toMs?: number,
+      includeSections?: string[],
+      excludeSections?: string[],
+    ) {
+      return provider.queryByEmbedding(embedding, topK, {
+        projectFilter: project,
+        sourceFilter: source as Parameters<DatabaseProvider["queryByEmbedding"]>[2]["sourceFilter"],
+        fromMs,
+        toMs,
+        sectionOpts: { includeSections, excludeSections },
+      });
+    },
 
-const { querySessionsHandler, getSessionChunksHandler } = createToolHandlers({
-  createEmbedding,
-  querySessions: provider.querySessions,
-  querySessionsHybrid: provider.querySessionsHybrid,
-  getSessionChunks: provider.getSessionChunks,
-});
+    async querySessionsHybrid(
+      embedding: number[],
+      queryText: string,
+      topK: number,
+      project?: string,
+      source?: string,
+      fromMs?: number,
+      toMs?: number,
+      includeSections?: string[],
+      excludeSections?: string[],
+    ) {
+      return provider.queryHybrid(embedding, queryText, topK, {
+        projectFilter: project,
+        sourceFilter: source as Parameters<DatabaseProvider["queryHybrid"]>[3]["sourceFilter"],
+        fromMs,
+        toMs,
+        sectionOpts: { includeSections, excludeSections },
+      });
+    },
+
+    async getSessionChunks(url: string, startIndex?: number, endIndex?: number) {
+      return provider.getChunksByUrl(url, startIndex, endIndex);
+    },
+  };
+}
 
 // ---------------------------------------------------------------------------
 // MCP server
@@ -106,51 +137,60 @@ const getSessionChunksSchema = {
   endIndex: z.number().int().min(0).optional().describe("Last chunk index to retrieve (0-based, inclusive). Optional."),
 };
 
-// Cast server to any to avoid deep MCP SDK Zod type instantiation (TS2589)
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-const serverAny = server as any;
-
-serverAny.tool(
-  "query_sessions",
-  "Semantically search across all indexed sessions stored in the vector database. Returns the most relevant chunks from past sessions. Sessions from OpenCode, Claude Code, Cursor, VS Code, Codex, and Gemini CLI are indexed into the same shared database.",
-  querySessionsSchema,
-  async (args: { queryText: string; project?: string; source?: string; limit?: number; fromDate?: string; toDate?: string; hybrid?: boolean; includeSections?: string; excludeSections?: string }) => {
-    // Parse ISO 8601 date strings into unix milliseconds.
-    // For toDate, a date-only string (no time component) is treated as end-of-day UTC
-    // by adding 86399999ms (23:59:59.999).
-    let fromMs: number | undefined;
-    let toMs: number | undefined;
-    if (args.fromDate) {
-      const t = new Date(args.fromDate).getTime();
-      if (!Number.isNaN(t)) fromMs = t;
-    }
-    if (args.toDate) {
-      const t = new Date(args.toDate).getTime();
-      if (!Number.isNaN(t)) {
-        // If the value is a date-only string (no 'T' separator), bump to end-of-day
-        toMs = args.toDate.includes("T") ? t : t + 86399999;
-      }
-    }
-    return querySessionsHandler({ ...args, limit: args.limit ?? 5, fromMs, toMs, includeSections: args.includeSections, excludeSections: args.excludeSections });
-  },
-);
-
-serverAny.tool(
-  "get_session_chunks",
-  "Retrieve the ordered content chunks for a specific session message. Use the URL from query_sessions results (e.g. 'session://ses_xxx#msg_yyy') to get the full context around a match.",
-  getSessionChunksSchema,
-  async (args: { sessionUrl: string; startIndex?: number; endIndex?: number }) =>
-    getSessionChunksHandler(args),
-);
-
 // ---------------------------------------------------------------------------
 // Start
 // ---------------------------------------------------------------------------
 
 async function main() {
+  // Create the backend provider (SQLite or Postgres based on config)
+  const config = resolveBackendConfig();
+  const provider = await createProvider(config);
+  const backendLabel = config.backend === "postgres"
+    ? `postgres: ${(config as { connectionString: string }).connectionString.replace(/:[^:@]*@/, ":***@")}`
+    : `sqlite: ${(config as { dbPath: string }).dbPath}`;
+
+  const queryFns = createProviderQueryFunctions(provider);
+  const { querySessionsHandler, getSessionChunksHandler } = createToolHandlers({
+    createEmbedding,
+    ...queryFns,
+  });
+
+  // Cast server to any to avoid deep MCP SDK Zod type instantiation (TS2589)
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const serverAny = server as any;
+
+  serverAny.tool(
+    "query_sessions",
+    "Semantically search across all indexed sessions stored in the vector database. Returns the most relevant chunks from past sessions. Sessions from OpenCode, Claude Code, Cursor, VS Code, Codex, and Gemini CLI are indexed into the same shared database.",
+    querySessionsSchema,
+    async (args: { queryText: string; project?: string; source?: string; limit?: number; fromDate?: string; toDate?: string; hybrid?: boolean; includeSections?: string; excludeSections?: string }) => {
+      let fromMs: number | undefined;
+      let toMs: number | undefined;
+      if (args.fromDate) {
+        const t = new Date(args.fromDate).getTime();
+        if (!Number.isNaN(t)) fromMs = t;
+      }
+      if (args.toDate) {
+        const t = new Date(args.toDate).getTime();
+        if (!Number.isNaN(t)) {
+          toMs = args.toDate.includes("T") ? t : t + 86399999;
+        }
+      }
+      return querySessionsHandler({ ...args, limit: args.limit ?? 5, fromMs, toMs, includeSections: args.includeSections, excludeSections: args.excludeSections });
+    },
+  );
+
+  serverAny.tool(
+    "get_session_chunks",
+    "Retrieve the ordered content chunks for a specific session message. Use the URL from query_sessions results (e.g. 'session://ses_xxx#msg_yyy') to get the full context around a match.",
+    getSessionChunksSchema,
+    async (args: { sessionUrl: string; startIndex?: number; endIndex?: number }) =>
+      getSessionChunksHandler(args),
+  );
+
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  console.error(`code-session-memory MCP server running (DB: ${dbPath})`);
+  console.error(`code-session-memory MCP server running (${backendLabel})`);
 }
 
 main().catch((err) => {

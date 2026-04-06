@@ -372,6 +372,7 @@ export interface ToolStatus {
 }
 
 export interface StatusResult {
+  backend: "sqlite" | "postgres";
   dbPath: string;
   dbExists: boolean;
   dbSizeBytes: number;
@@ -386,10 +387,19 @@ export interface StatusResult {
 }
 
 export function getStatus(): StatusResult {
-  const dbPath = resolveDbPath();
-  const mcpPath = getMcpServerPath();
-  const dbExists = fs.existsSync(dbPath);
+  const { resolveBackendConfig } = require("./config") as typeof import("./config");
+  let backendConfig: import("./config").DatabaseBackendConfig;
+  try {
+    backendConfig = resolveBackendConfig();
+  } catch {
+    // Fall back to SQLite if config resolution fails
+    backendConfig = { backend: "sqlite", dbPath: resolveDbPath() };
+  }
 
+  const mcpPath = getMcpServerPath();
+
+  let dbPath: string;
+  let dbExists: boolean;
   let dbSizeBytes = 0;
   let totalSessions = 0;
   let totalChunks = 0;
@@ -398,27 +408,37 @@ export function getStatus(): StatusResult {
   let topTools: Array<{ tool_name: string; call_count: number }> = [];
   let sessionsBySource: Array<{ source: string; count: number }> = [];
 
-  if (dbExists) {
-    try {
-      dbSizeBytes = fs.statSync(dbPath).size;
-      const db = openDatabase({ dbPath });
-      totalChunks = (db.prepare("SELECT COUNT(*) as n FROM vec_items").get() as { n: number }).n;
-      totalSessions = (db.prepare("SELECT COUNT(*) as n FROM sessions_meta").get() as { n: number }).n;
-      sessionsBySource = (db.prepare(
-        "SELECT source, COUNT(*) as n FROM sessions_meta GROUP BY source"
-      ).all() as Array<{ source: string; n: number }>).map(r => ({ source: r.source, count: r.n }));
+  if (backendConfig.backend === "postgres") {
+    const pgConfig = backendConfig as import("./config").PostgresBackendConfig;
+    // Mask password in URL for display
+    dbPath = pgConfig.connectionString.replace(/:[^:@]*@/, ":***@");
+    dbExists = true; // Assume Postgres is reachable if configured
+    // Stats will be fetched async by getStatusAsync() below
+  } else {
+    dbPath = (backendConfig as import("./config").SqliteBackendConfig).dbPath;
+    dbExists = fs.existsSync(dbPath);
 
-      // Analytics table stats (may not exist in older DBs — catch silently)
+    if (dbExists) {
       try {
-        totalMessages = (db.prepare("SELECT COUNT(*) as n FROM messages").get() as { n: number }).n;
-        totalToolCalls = (db.prepare("SELECT COUNT(*) as n FROM tool_calls").get() as { n: number }).n;
-        topTools = db.prepare(
-          "SELECT tool_name, COUNT(*) as call_count FROM tool_calls GROUP BY tool_name ORDER BY call_count DESC LIMIT 5"
-        ).all() as Array<{ tool_name: string; call_count: number }>;
-      } catch { /* tables may not exist yet */ }
+        dbSizeBytes = fs.statSync(dbPath).size;
+        const db = openDatabase({ dbPath });
+        totalChunks = (db.prepare("SELECT COUNT(*) as n FROM vec_items").get() as { n: number }).n;
+        totalSessions = (db.prepare("SELECT COUNT(*) as n FROM sessions_meta").get() as { n: number }).n;
+        sessionsBySource = (db.prepare(
+          "SELECT source, COUNT(*) as n FROM sessions_meta GROUP BY source"
+        ).all() as Array<{ source: string; n: number }>).map(r => ({ source: r.source, count: r.n }));
 
-      db.close();
-    } catch { /* DB might be empty or broken */ }
+        try {
+          totalMessages = (db.prepare("SELECT COUNT(*) as n FROM messages").get() as { n: number }).n;
+          totalToolCalls = (db.prepare("SELECT COUNT(*) as n FROM tool_calls").get() as { n: number }).n;
+          topTools = db.prepare(
+            "SELECT tool_name, COUNT(*) as call_count FROM tool_calls GROUP BY tool_name ORDER BY call_count DESC LIMIT 5"
+          ).all() as Array<{ tool_name: string; call_count: number }>;
+        } catch { /* tables may not exist yet */ }
+
+        db.close();
+      } catch { /* DB might be empty or broken */ }
+    }
   }
 
   const tools: Record<string, ToolStatus> = {};
@@ -499,6 +519,7 @@ export function getStatus(): StatusResult {
   ) && mcpOk && dbExists;
 
   return {
+    backend: backendConfig.backend,
     dbPath,
     dbExists,
     dbSizeBytes,
@@ -511,4 +532,52 @@ export function getStatus(): StatusResult {
     tools,
     allOk,
   };
+}
+
+/**
+ * Async version of getStatus that also fetches stats from Postgres when applicable.
+ */
+export async function getStatusAsync(): Promise<StatusResult> {
+  const result = getStatus();
+
+  if (result.backend === "postgres") {
+    try {
+      const { resolveBackendConfig } = await import("./config");
+      const { createProvider } = await import("./providers");
+      const config = resolveBackendConfig();
+      const provider = await createProvider(config);
+      try {
+        const overview = await provider.getOverviewStats();
+        result.totalSessions = overview.total_sessions;
+        result.totalMessages = overview.total_messages;
+        result.totalToolCalls = overview.total_tool_calls;
+
+        const sessions = await provider.listSessions();
+        result.totalChunks = sessions.reduce((n, s) => n + s.chunk_count, 0);
+        result.sessionsBySource = [];
+        const sourceMap = new Map<string, number>();
+        for (const s of sessions) {
+          sourceMap.set(s.source, (sourceMap.get(s.source) ?? 0) + 1);
+        }
+        for (const [source, count] of sourceMap) {
+          result.sessionsBySource.push({ source, count });
+        }
+
+        const tools = await provider.getToolUsageStats();
+        result.topTools = tools.slice(0, 5).map(t => ({
+          tool_name: t.tool_name,
+          call_count: t.call_count,
+        }));
+
+        result.dbExists = true;
+      } finally {
+        await provider.close();
+      }
+    } catch {
+      // Postgres unreachable — leave stats at 0
+      result.dbExists = false;
+    }
+  }
+
+  return result;
 }

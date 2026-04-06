@@ -23,7 +23,7 @@ export default function StatusDashboard({ status }: { status: StatusResult }) {
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
         <StatCard label="Sessions" value={status.totalSessions.toLocaleString()} />
         <StatCard label="Chunks" value={status.totalChunks.toLocaleString()} />
-        <StatCard label="DB Size" value={formatBytes(status.dbSizeBytes)} />
+        <StatCard label="DB Size" value={status.dbSizeBytes > 0 ? formatBytes(status.dbSizeBytes) : "N/A"} />
         <StatCard
           label="Status"
           value={status.allOk ? "OK" : "Issues"}

@@ -2,7 +2,9 @@
 
 Automatic vector memory for [OpenCode](https://opencode.ai), [Claude Code](https://claude.ai/code), [Cursor](https://www.cursor.com), [VS Code](https://code.visualstudio.com), Codex, and Gemini CLI sessions — shared across all tools.
 
-Every time the AI agent finishes its turn, `code-session-memory` automatically indexes the new messages into a local [sqlite-vec](https://github.com/asg017/sqlite-vec) vector database. Past sessions become semantically searchable — both by the AI agent (via the MCP server) and by you. Sessions from OpenCode, Claude Code, Cursor, VS Code, Codex, and Gemini CLI are stored in the **same database**, so memory is shared across tools.
+Every time the AI agent finishes its turn, `code-session-memory` automatically indexes the new messages into a vector database. Past sessions become semantically searchable — both by the AI agent (via the MCP server) and by you. Sessions from OpenCode, Claude Code, Cursor, VS Code, Codex, and Gemini CLI are stored in the **same database**, so memory is shared across tools.
+
+By default, data is stored locally in a [sqlite-vec](https://github.com/asg017/sqlite-vec) database. Optionally, you can use **PostgreSQL + pgvector** (e.g. [Supabase](https://supabase.com)) as a centralized backend to share memory across multiple machines.
 
 ## How it works
 
@@ -312,6 +314,9 @@ Show me how we solved the TypeScript config issue.
 | `OPENAI_MODEL` | `text-embedding-3-large` | Override the embedding model. |
 | `OPENAI_SUMMARY_MODEL` | `gpt-5-nano` | Override the model used for session compaction (Compact for restart). |
 | `CSM_SUMMARY_MAX_OUTPUT_TOKENS` | `5000` | Override the max output token budget for session compaction. |
+| `CSM_BACKEND` | `sqlite` | Database backend: `sqlite` (default) or `postgres`. |
+| `CSM_POSTGRES_URL` | — | PostgreSQL connection string (when `CSM_BACKEND=postgres`). |
+| `CSM_POSTGRES_SSL` | `false` | Set to `true` for SSL connections (required for Supabase). |
 
 ### Database path
 
@@ -323,13 +328,108 @@ export OPENCODE_MEMORY_DB_PATH=/custom/path/sessions.db
 npx code-session-memory install
 ```
 
+### PostgreSQL backend (optional)
+
+Instead of the default local SQLite database, you can use **PostgreSQL with pgvector** as a centralized backend. This is useful when you want to:
+
+- **Share memory across multiple machines** (e.g. laptop + desktop)
+- **Use a managed database** like [Supabase](https://supabase.com) (free tier includes pgvector)
+- **Centralize sessions** from all your tools in one place
+
+#### Setup
+
+1. **Configure the backend:**
+
+```bash
+npx code-session-memory config set-backend postgres --url "postgresql://user:pass@db.xyz.supabase.co:5432/postgres" --ssl
+```
+
+This tests the connection, creates the schema (tables + HNSW vector index + GIN full-text index), and saves the config to `~/.config/code-session-memory/config.json`.
+
+2. **Migrate existing SQLite data** (optional):
+
+```bash
+npx code-session-memory migrate
+```
+
+This auto-discovers your local SQLite database and migrates all data (sessions, chunks with embeddings, messages, tool calls) to PostgreSQL. Embeddings are transferred directly — no re-embedding needed.
+
+3. **Done.** All indexers and MCP queries now use PostgreSQL.
+
+#### Multi-machine setup
+
+To share memory across multiple machines, run the setup on each:
+
+```bash
+# On machine A:
+npx code-session-memory config set-backend postgres --url "postgresql://..." --ssl
+npx code-session-memory migrate
+
+# On machine B:
+npx code-session-memory config set-backend postgres --url "postgresql://..." --ssl
+npx code-session-memory migrate
+```
+
+Sessions from both machines are merged into the same database. Duplicate chunks are automatically deduplicated (deterministic chunk IDs). Each machine is tagged with its hostname via `origin_host` in `sessions_meta`.
+
+#### Revert to SQLite
+
+```bash
+npx code-session-memory config set-backend sqlite
+```
+
+#### View current configuration
+
+```bash
+npx code-session-memory config show
+```
+
+#### Migration options
+
+```bash
+npx code-session-memory migrate --help
+```
+
+| Flag | Description |
+|---|---|
+| `--sqlite <path>` | Explicit SQLite DB path (repeatable). Default: auto-discover. |
+| `--pg-url <url>` | Override Postgres URL (if not yet configured). |
+| `--origin <name>` | Label for this machine (default: hostname). |
+| `--dry-run` | Preview counts without writing. |
+| `--batch-size <n>` | Rows per INSERT batch (default: 100). |
+
+#### Config file
+
+The backend configuration is stored at `~/.config/code-session-memory/config.json`:
+
+```json
+{
+  "backend": "postgres",
+  "postgres": {
+    "url": "postgresql://user:pass@host:5432/dbname",
+    "ssl": true
+  }
+}
+```
+
+Configuration priority: environment variables (`CSM_BACKEND` + `CSM_POSTGRES_URL`) > config file > default SQLite.
+
 ## Project structure
 
 ```
 code-session-memory/
 ├── src/
 │   ├── types.ts                  # Shared TypeScript types
+│   ├── config.ts                 # Backend config resolution (SQLite / Postgres)
 │   ├── database.ts               # SQLite-vec: init, insert, query
+│   ├── providers/
+│   │   ├── types.ts              # DatabaseProvider async interface
+│   │   ├── index.ts              # createProvider() factory
+│   │   ├── sqlite-provider.ts    # SQLite implementation (wraps database.ts)
+│   │   ├── pg-provider.ts        # PostgreSQL + pgvector implementation
+│   │   └── pg-schema.ts          # PostgreSQL DDL (tables, indexes)
+│   ├── migrate/
+│   │   └── sqlite-to-pg.ts       # Migration tool (SQLite → PostgreSQL)
 │   ├── chunker.ts                # Heading-aware markdown chunker
 │   ├── embedder.ts               # OpenAI embeddings (parallel batched)
 │   ├── session-to-md.ts          # OpenCode SDK messages → markdown

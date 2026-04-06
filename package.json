@@ -1,6 +1,6 @@
 {
   "name": "code-session-memory",
-  "version": "0.17.1",
+  "version": "0.18.0",
   "description": "Automatically index OpenCode, Claude Code, Cursor, VS Code, Codex, and Gemini CLI sessions into a shared sqlite-vec vector database for semantic search across your AI coding history",
   "type": "commonjs",
   "main": "dist/src/indexer.js",
@@ -52,6 +52,7 @@
     "better-sqlite3": "^11.9.1",
     "express": "^5.2.1",
     "openai": "^4.20.1",
+    "pg": "^8.13.0",
     "smol-toml": "^1.6.0",
     "sqlite-vec": "0.1.7-alpha.2",
     "zod": "^3.24.2"
@@ -59,6 +60,7 @@
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.12",
     "@types/express": "^5.0.6",
+    "@types/pg": "^8.11.0",
     "@types/node": "^20.10.0",
     "@vitest/coverage-v8": "^2.0.0",
     "tsx": "^4.19.2",

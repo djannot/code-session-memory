@@ -9,18 +9,12 @@
  */
 
 import * as clack from "@clack/prompts";
-import { resolveDbPath, openDatabase } from "./database";
-import {
-  listSessions,
-  getSessionChunksOrdered,
-  deleteSession,
-  deleteSessionsOlderThan,
-  SessionRow,
-  SessionFilter,
-} from "./database";
+import type { SessionRow } from "./database";
 import type { SessionSource } from "./types";
 import { compactSession } from "./session-compactor";
 import { copyToClipboard } from "./clipboard";
+import { resolveBackendConfig } from "./config";
+import { createProvider, type DatabaseProvider } from "./providers";
 
 // ---------------------------------------------------------------------------
 // Formatting helpers
@@ -66,17 +60,11 @@ function hr(char = "─", width = 72): string {
 }
 
 // ---------------------------------------------------------------------------
-// DB helpers
+// Provider helpers
 // ---------------------------------------------------------------------------
 
-function withDb<T>(fn: (db: ReturnType<typeof openDatabase>) => T): T {
-  const dbPath = resolveDbPath();
-  const db = openDatabase({ dbPath });
-  try {
-    return fn(db);
-  } finally {
-    db.close();
-  }
+async function getProvider(): Promise<DatabaseProvider> {
+  return createProvider(resolveBackendConfig());
 }
 
 // ---------------------------------------------------------------------------
@@ -268,7 +256,7 @@ async function sessionActionLoop(session: SessionRow): Promise<"back" | "exit"> 
 
     if (action === "print") {
       clack.outro(dim("Printing session…"));
-      printSession(session.session_id);
+      await printSession(session.session_id);
       return "exit";
     }
 
@@ -288,7 +276,8 @@ async function sessionActionLoop(session: SessionRow): Promise<"back" | "exit"> 
         continue;
       }
 
-      const deleted = withDb((db) => deleteSession(db, session.session_id));
+      const p = await getProvider();
+      const deleted = await p.deleteSession(session.session_id);
       clack.log.success(`Deleted ${deleted} chunks.`);
       clack.log.warn(
         "Note: if this session's source files still exist, it will be re-indexed on the next agent turn.",
@@ -319,7 +308,8 @@ async function runCompact(
   }
 
   // Load chunks from DB.
-  const chunks = withDb((db) => getSessionChunksOrdered(db, session.session_id));
+  const p = await getProvider();
+  const chunks = await p.getSessionChunksOrdered(session.session_id);
 
   if (chunks.length === 0) {
     clack.log.warn("Session has no indexed chunks to compact.");
@@ -372,7 +362,8 @@ export async function cmdSessionsList(): Promise<void> {
   clack.intro(bold("Sessions"));
 
   while (true) {
-    const sessions = withDb((db) => listSessions(db));
+    const p = await getProvider();
+    const sessions = await p.listSessions();
 
     if (sessions.length === 0) {
       clack.log.warn("No sessions indexed yet.");
@@ -398,7 +389,8 @@ export async function cmdSessionsList(): Promise<void> {
 // ---------------------------------------------------------------------------
 
 async function pickSession(): Promise<SessionRow | null> {
-  const sessions = withDb((db) => listSessions(db));
+  const p = await getProvider();
+  const sessions = await p.listSessions();
 
   if (sessions.length === 0) {
     clack.log.warn("No sessions indexed yet.");
@@ -421,20 +413,18 @@ export async function cmdSessionsPrint(sessionId?: string): Promise<void> {
       return;
     }
     clack.outro(dim("Printing session…"));
-    printSession(session.session_id);
+    await printSession(session.session_id);
     return;
   }
 
-  printSession(sessionId);
+  await printSession(sessionId);
 }
 
-function printSession(sessionId: string): void {
-  const { session, chunks } = withDb((db) => {
-    const rows    = listSessions(db, {});
-    const session = rows.find((s) => s.session_id === sessionId);
-    const chunks  = getSessionChunksOrdered(db, sessionId);
-    return { session, chunks };
-  });
+async function printSession(sessionId: string): Promise<void> {
+  const p = await getProvider();
+  const rows = await p.listSessions({});
+  const session = rows.find((s) => s.session_id === sessionId);
+  const chunks = await p.getSessionChunksOrdered(sessionId);
 
   if (!session && chunks.length === 0) {
     console.error(`No session found with ID: ${sessionId}`);
@@ -491,10 +481,9 @@ export async function cmdSessionsDelete(sessionId?: string): Promise<void> {
       return;
     }
   } else {
-    session = withDb((db) => {
-      const rows = listSessions(db, {});
-      return rows.find((s) => s.session_id === sessionId) ?? null;
-    });
+    const p = await getProvider();
+    const rows = await p.listSessions({});
+    session = rows.find((s) => s.session_id === sessionId) ?? null;
 
     if (!session) {
       console.error(`No session found with ID: ${sessionId}`);
@@ -522,7 +511,8 @@ export async function cmdSessionsDelete(sessionId?: string): Promise<void> {
     return;
   }
 
-  const deleted = withDb((db) => deleteSession(db, session!.session_id));
+  const p2 = await getProvider();
+  const deleted = await p2.deleteSession(session!.session_id);
   clack.log.success(`Deleted ${deleted} chunks.`);
   clack.log.warn(
     "Note: if this session's source files still exist, it will be re-indexed on the next agent turn.",
@@ -573,7 +563,8 @@ export async function cmdSessionsPurge(args: string[]): Promise<void> {
   }
 
   const cutoff = Date.now() - days * DAY_MS;
-  const candidates = withDb((db) => listSessions(db, { toDate: cutoff }));
+  const p = await getProvider();
+  const candidates = await p.listSessions({ toDate: cutoff });
 
   if (candidates.length === 0) {
     const msg = `No sessions older than ${days} day${days !== 1 ? "s" : ""} found.`;
@@ -590,8 +581,7 @@ export async function cmdSessionsPurge(args: string[]): Promise<void> {
   const summary = `${candidates.length} session${candidates.length !== 1 ? "s" : ""} (${totalChunks} chunks) older than ${days} day${days !== 1 ? "s" : ""}`;
 
   if (skipConfirm) {
-    // Non-interactive: just do it
-    const result = withDb((db) => deleteSessionsOlderThan(db, cutoff));
+    const result = await p.deleteSessionsOlderThan(cutoff);
     console.log(`Deleted ${result.sessions} sessions (${result.chunks} chunks).`);
     return;
   }
@@ -608,7 +598,7 @@ export async function cmdSessionsPurge(args: string[]): Promise<void> {
     return;
   }
 
-  const result = withDb((db) => deleteSessionsOlderThan(db, cutoff));
+  const result = await p.deleteSessionsOlderThan(cutoff);
   clack.log.success(`Deleted ${result.sessions} sessions (${result.chunks} chunks).`);
   clack.log.warn(
     "Note: sessions will be re-indexed on the next agent turn if source files still exist.",

@@ -14,10 +14,11 @@
  */
 
 import { APIConnectionError, RateLimitError } from "openai";
-import { resolveDbPath, openDatabase } from "./database";
 import { indexNewMessages } from "./indexer";
 import { getSessionFromOpenCodeDb, getMessagesFromOpenCodeDb } from "./opencode-db-to-messages";
 import type { FullMessage } from "./types";
+import { resolveBackendConfig } from "./config";
+import { createProvider } from "./providers";
 
 const FETCH_RETRIES = 3;
 const FETCH_RETRY_DELAY_MS = 500;
@@ -118,17 +119,16 @@ async function main() {
     messages = dbMessages;
   }
 
-  const dbPath = resolveDbPath();
-  const db = openDatabase({ dbPath });
+  const provider = await createProvider(resolveBackendConfig());
   try {
     await indexNewMessages(
-      db,
+      provider,
       { id: session.id, title: session.title, directory: session.directory },
       messages,
       "opencode",
     );
   } finally {
-    db.close();
+    await provider.close();
   }
 
   // No output — the plugin runs this silently via Bun's $.quiet()

@@ -11,10 +11,11 @@
  * Runs as a Node.js subprocess (not Bun) so native addons load correctly.
  */
 
-import { resolveDbPath, openDatabase, getSessionMeta } from "./database";
 import { indexNewMessages } from "./indexer";
 import { parseTranscript, deriveSessionTitle } from "./transcript-to-messages";
 import type { FullMessage } from "./types";
+import { resolveBackendConfig } from "./config";
+import { createProvider } from "./providers";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -53,8 +54,7 @@ async function main() {
     process.exit(1);
   }
 
-  const dbPath = resolveDbPath();
-  const db = openDatabase({ dbPath });
+  const provider = await createProvider(resolveBackendConfig());
 
   try {
     // Parse the transcript — retry if the JSONL ends on a tool result,
@@ -72,7 +72,7 @@ async function main() {
     }
 
     // Build a session title from the first user message
-    const existingMeta = getSessionMeta(db, sessionId);
+    const existingMeta = await provider.getSessionMeta(sessionId);
     const title = existingMeta?.session_title || deriveSessionTitle(messages);
 
     const session = {
@@ -81,12 +81,12 @@ async function main() {
       directory: cwd ?? "",
     };
 
-    await indexNewMessages(db, session, messages, "claude-code", { transcriptPath });
+    await indexNewMessages(provider, session, messages, "claude-code", { transcriptPath });
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
     process.stderr.write(`[code-session-memory] Indexing error: ${msg}\n`);
   } finally {
-    db.close();
+    await provider.close();
   }
 }
 

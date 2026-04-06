@@ -1,55 +1,23 @@
 /**
  * REST API route handlers for the web UI.
  *
- * Uses short-lived DB connections (open → query → close) per request,
- * matching the MCP server's pattern to avoid WAL locking issues.
+ * Accepts a DatabaseProvider for backend-agnostic operation (SQLite or Postgres).
  */
 
 import { Router, Request, Response } from "express";
 import fs from "fs";
 import path from "path";
 import os from "os";
-import {
-  resolveDbPath,
-  openDatabase,
-  queryByEmbedding,
-  queryHybrid,
-  getChunksByUrl,
-  getSessionContext,
-  listSessions,
-  getSessionChunksOrdered,
-  deleteSession,
-  deleteSessionsOlderThan,
-  getToolUsageStats,
-  getMessageStats,
-  getOverviewStats,
-  getSessionAnalytics,
-  getSessionMeta,
-  upsertSessionMeta,
-} from "../database";
+import type { DatabaseProvider } from "../providers/types";
 import { createEmbedder } from "../embedder";
 import { indexNewMessages } from "../indexer";
-import { getStatus } from "../status";
+import { getStatusAsync } from "../status";
 import type { SessionSource, SessionMeta, AnalyticsFilter } from "../types";
 import { parseTranscript, deriveSessionTitle } from "../transcript-to-messages";
 import { cursorTranscriptToMessages } from "../cursor-transcript-to-messages";
 import { parseVscodeTranscript } from "../vscode-transcript-to-messages";
 import { codexSessionToMessages, deriveCodexSessionTitle } from "../codex-session-to-messages";
 import { geminiSessionToMessages, deriveGeminiSessionTitle } from "../gemini-session-to-messages";
-
-// ---------------------------------------------------------------------------
-// DB helper
-// ---------------------------------------------------------------------------
-
-function withDb<T>(fn: (db: ReturnType<typeof openDatabase>) => T): T {
-  const dbPath = resolveDbPath();
-  const db = openDatabase({ dbPath });
-  try {
-    return fn(db);
-  } finally {
-    db.close();
-  }
-}
 
 // ---------------------------------------------------------------------------
 // Date helper
@@ -173,11 +141,9 @@ function discoverGeminiTranscript(sessionId: string): string | null {
 }
 
 function resolveTranscriptPath(meta: SessionMeta): string | null {
-  // Try stored path first
   if (meta.transcript_path && fs.existsSync(meta.transcript_path)) {
     return meta.transcript_path;
   }
-  // Fall back to source-specific discovery
   switch (meta.source) {
     case "claude-code": return discoverClaudeTranscript(meta.session_id);
     case "codex": return discoverCodexTranscript(meta.session_id);
@@ -191,14 +157,14 @@ interface ReindexCheckResult {
   skipped: Array<{ id: string; title: string; source: SessionSource; reason: string }>;
 }
 
-function checkReindexability(
-  db: ReturnType<typeof openDatabase>,
+async function checkReindexability(
+  provider: DatabaseProvider,
   ids: string[],
-): ReindexCheckResult {
+): Promise<ReindexCheckResult> {
   const result: ReindexCheckResult = { ready: [], skipped: [] };
 
   for (const id of ids) {
-    const meta = getSessionMeta(db, id);
+    const meta = await provider.getSessionMeta(id);
     if (!meta) {
       result.skipped.push({ id, title: id, source: "opencode", reason: "Session not found in database" });
       continue;
@@ -229,7 +195,7 @@ function checkReindexability(
 // Routes
 // ---------------------------------------------------------------------------
 
-export function createApiRouter(): Router {
+export function createApiRouter(provider: DatabaseProvider): Router {
   const router = Router();
 
   // POST /api/search — hybrid semantic + keyword search
@@ -263,12 +229,10 @@ export function createApiRouter(): Router {
       const embedder = createEmbedder();
       const embedding = await embedder.embedText(queryText);
 
-      const useHybrid = hybrid === true;
-      const results = withDb((db) =>
-        useHybrid
-          ? queryHybrid(db, embedding, queryText, topK, undefined, sourceFilter, fromMs, toMs, sectionFilter)
-          : queryByEmbedding(db, embedding, topK, undefined, sourceFilter, fromMs, toMs, sectionFilter)
-      );
+      const filters = { sourceFilter, fromMs, toMs, sectionFilter };
+      const results = hybrid === true
+        ? await provider.queryHybrid(embedding, queryText, topK, filters)
+        : await provider.queryByEmbedding(embedding, topK, filters);
 
       res.json({ results });
     } catch (err) {
@@ -277,8 +241,8 @@ export function createApiRouter(): Router {
     }
   });
 
-  // GET /api/chunks — fetch chunks by URL with optional index range (for context preview)
-  router.get("/chunks", (req: Request, res: Response) => {
+  // GET /api/chunks — fetch chunks by URL with optional index range
+  router.get("/chunks", async (req: Request, res: Response) => {
     try {
       const url = typeof req.query.url === "string" ? req.query.url : "";
       if (!url) {
@@ -289,7 +253,7 @@ export function createApiRouter(): Router {
       const startIndex = typeof req.query.startIndex === "string" ? parseInt(req.query.startIndex, 10) : undefined;
       const endIndex = typeof req.query.endIndex === "string" ? parseInt(req.query.endIndex, 10) : undefined;
 
-      const chunks = withDb((db) => getChunksByUrl(db, url, startIndex, endIndex));
+      const chunks = await provider.getChunksByUrl(url, startIndex, endIndex);
       res.json({ chunks });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -298,7 +262,7 @@ export function createApiRouter(): Router {
   });
 
   // GET /api/context — fetch session-level context around a specific chunk
-  router.get("/context", (req: Request, res: Response) => {
+  router.get("/context", async (req: Request, res: Response) => {
     try {
       const sessionId = typeof req.query.sessionId === "string" ? req.query.sessionId : "";
       const chunkId = typeof req.query.chunkId === "string" ? req.query.chunkId : "";
@@ -309,7 +273,7 @@ export function createApiRouter(): Router {
 
       const windowSize = typeof req.query.window === "string" ? parseInt(req.query.window, 10) : 1;
 
-      const chunks = withDb((db) => getSessionContext(db, sessionId, chunkId, windowSize));
+      const chunks = await provider.getSessionContext(sessionId, chunkId, windowSize);
       res.json({ chunks });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -318,7 +282,7 @@ export function createApiRouter(): Router {
   });
 
   // GET /api/sessions — list sessions
-  router.get("/sessions", (req: Request, res: Response) => {
+  router.get("/sessions", async (req: Request, res: Response) => {
     try {
       const source = typeof req.query.source === "string" && VALID_SOURCES.has(req.query.source)
         ? req.query.source as SessionSource
@@ -333,7 +297,7 @@ export function createApiRouter(): Router {
         toDate = parseDateMs(req.query.to, "end") ?? undefined;
       }
 
-      const sessions = withDb((db) => listSessions(db, { source, fromDate, toDate }));
+      const sessions = await provider.listSessions({ source, fromDate, toDate });
       res.json({ sessions });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -342,15 +306,12 @@ export function createApiRouter(): Router {
   });
 
   // GET /api/sessions/:id — session detail with chunks
-  router.get("/sessions/:id", (req: Request, res: Response) => {
+  router.get("/sessions/:id", async (req: Request, res: Response) => {
     try {
       const sessionId = String(req.params.id);
-      const { session, chunks } = withDb((db) => {
-        const rows = listSessions(db, {});
-        const session = rows.find((s) => s.session_id === sessionId) ?? null;
-        const chunks = getSessionChunksOrdered(db, sessionId);
-        return { session, chunks };
-      });
+      const rows = await provider.listSessions({});
+      const session = rows.find((s) => s.session_id === sessionId) ?? null;
+      const chunks = await provider.getSessionChunksOrdered(sessionId);
 
       if (!session && chunks.length === 0) {
         res.status(404).json({ error: "Session not found" });
@@ -365,10 +326,10 @@ export function createApiRouter(): Router {
   });
 
   // DELETE /api/sessions/:id — delete a session
-  router.delete("/sessions/:id", (req: Request, res: Response) => {
+  router.delete("/sessions/:id", async (req: Request, res: Response) => {
     try {
       const sessionId = String(req.params.id);
-      const deleted = withDb((db) => deleteSession(db, sessionId));
+      const deleted = await provider.deleteSession(sessionId);
       res.json({ deleted });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -377,7 +338,7 @@ export function createApiRouter(): Router {
   });
 
   // POST /api/sessions/bulk-delete — delete multiple sessions at once
-  router.post("/sessions/bulk-delete", (req: Request, res: Response) => {
+  router.post("/sessions/bulk-delete", async (req: Request, res: Response) => {
     try {
       const { ids } = req.body;
       if (!Array.isArray(ids) || ids.length === 0 || !ids.every((id: unknown) => typeof id === "string")) {
@@ -385,15 +346,12 @@ export function createApiRouter(): Router {
         return;
       }
 
-      const deleted = withDb((db) => {
-        let total = 0;
-        for (const id of ids) {
-          total += deleteSession(db, id);
-        }
-        return total;
-      });
+      let total = 0;
+      for (const id of ids) {
+        total += await provider.deleteSession(id);
+      }
 
-      res.json({ deleted });
+      res.json({ deleted: total });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       res.status(500).json({ error: message });
@@ -401,7 +359,7 @@ export function createApiRouter(): Router {
   });
 
   // POST /api/sessions/reindex-check — dry run: which sessions can be reindexed?
-  router.post("/sessions/reindex-check", (req: Request, res: Response) => {
+  router.post("/sessions/reindex-check", async (req: Request, res: Response) => {
     try {
       const { ids } = req.body;
       if (!Array.isArray(ids) || ids.length === 0 || !ids.every((id: unknown) => typeof id === "string")) {
@@ -409,7 +367,7 @@ export function createApiRouter(): Router {
         return;
       }
 
-      const result = withDb((db) => checkReindexability(db, ids));
+      const result = await checkReindexability(provider, ids);
       res.json(result);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -434,60 +392,51 @@ export function createApiRouter(): Router {
       let reindexed = 0;
       const failed: Array<{ id: string; reason: string }> = [];
 
-      // Process sequentially to avoid overwhelming the embedding API
       for (const id of ids) {
         try {
-          const dbPath = resolveDbPath();
-          const db = openDatabase({ dbPath });
-          try {
-            const meta = getSessionMeta(db, id);
-            if (!meta) { failed.push({ id, reason: "Session not found" }); continue; }
+          const meta = await provider.getSessionMeta(id);
+          if (!meta) { failed.push({ id, reason: "Session not found" }); continue; }
 
-            const transcriptPath = resolveTranscriptPath(meta);
-            if (!transcriptPath) { failed.push({ id, reason: "Transcript not available" }); continue; }
+          const transcriptPath = resolveTranscriptPath(meta);
+          if (!transcriptPath) { failed.push({ id, reason: "Transcript not available" }); continue; }
 
-            // Parse transcript based on source
-            let messages;
-            let title = meta.session_title;
-            switch (meta.source) {
-              case "claude-code":
-                messages = parseTranscript(transcriptPath);
-                if (!title) title = deriveSessionTitle(messages);
-                break;
-              case "cursor":
-                messages = cursorTranscriptToMessages(transcriptPath, id);
-                break;
-              case "vscode":
-                messages = parseVscodeTranscript(transcriptPath);
-                break;
-              case "codex":
-                messages = codexSessionToMessages(transcriptPath);
-                if (!title) title = deriveCodexSessionTitle(messages);
-                break;
-              case "gemini-cli":
-                messages = geminiSessionToMessages(transcriptPath);
-                if (!title) title = deriveGeminiSessionTitle(messages, id);
-                break;
-              default:
-                failed.push({ id, reason: `Source "${meta.source}" cannot be reindexed` });
-                continue;
-            }
-
-            if (!messages || messages.length === 0) {
-              failed.push({ id, reason: "Transcript parsed but produced no messages" });
+          let messages;
+          let title = meta.session_title;
+          switch (meta.source) {
+            case "claude-code":
+              messages = parseTranscript(transcriptPath);
+              if (!title) title = deriveSessionTitle(messages);
+              break;
+            case "cursor":
+              messages = cursorTranscriptToMessages(transcriptPath, id);
+              break;
+            case "vscode":
+              messages = parseVscodeTranscript(transcriptPath);
+              break;
+            case "codex":
+              messages = codexSessionToMessages(transcriptPath);
+              if (!title) title = deriveCodexSessionTitle(messages);
+              break;
+            case "gemini-cli":
+              messages = geminiSessionToMessages(transcriptPath);
+              if (!title) title = deriveGeminiSessionTitle(messages, id);
+              break;
+            default:
+              failed.push({ id, reason: `Source "${meta.source}" cannot be reindexed` });
               continue;
-            }
-
-            // Safe: parse succeeded, now delete old data and re-index
-            deleteSession(db, id);
-
-            const session = { id, title, directory: meta.project };
-            await indexNewMessages(db, session, messages, meta.source, { transcriptPath });
-
-            reindexed++;
-          } finally {
-            db.close();
           }
+
+          if (!messages || messages.length === 0) {
+            failed.push({ id, reason: "Transcript parsed but produced no messages" });
+            continue;
+          }
+
+          await provider.deleteSession(id);
+
+          const session = { id, title, directory: meta.project };
+          await indexNewMessages(provider, session, messages, meta.source, { transcriptPath });
+
+          reindexed++;
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
           failed.push({ id, reason: msg });
@@ -502,7 +451,7 @@ export function createApiRouter(): Router {
   });
 
   // POST /api/sessions/purge — purge old sessions
-  router.post("/sessions/purge", (req: Request, res: Response) => {
+  router.post("/sessions/purge", async (req: Request, res: Response) => {
     try {
       const { days } = req.body;
       if (typeof days !== "number" || days <= 0) {
@@ -512,7 +461,7 @@ export function createApiRouter(): Router {
 
       const DAY_MS = 86400 * 1000;
       const cutoff = Date.now() - days * DAY_MS;
-      const result = withDb((db) => deleteSessionsOlderThan(db, cutoff));
+      const result = await provider.deleteSessionsOlderThan(cutoff);
       res.json(result);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -524,11 +473,10 @@ export function createApiRouter(): Router {
   // Analytics endpoints
   // -------------------------------------------------------------------------
 
-  // GET /api/analytics/overview — aggregate totals
-  router.get("/analytics/overview", (req: Request, res: Response) => {
+  router.get("/analytics/overview", async (req: Request, res: Response) => {
     try {
       const filter = parseAnalyticsFilter(req);
-      const stats = withDb((db) => getOverviewStats(db, filter));
+      const stats = await provider.getOverviewStats(filter);
       res.json(stats);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -536,11 +484,10 @@ export function createApiRouter(): Router {
     }
   });
 
-  // GET /api/analytics/tools — tool usage stats
-  router.get("/analytics/tools", (req: Request, res: Response) => {
+  router.get("/analytics/tools", async (req: Request, res: Response) => {
     try {
       const filter = parseAnalyticsFilter(req);
-      const stats = withDb((db) => getToolUsageStats(db, filter));
+      const stats = await provider.getToolUsageStats(filter);
       res.json({ tools: stats });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -548,11 +495,10 @@ export function createApiRouter(): Router {
     }
   });
 
-  // GET /api/analytics/messages — message counts by role
-  router.get("/analytics/messages", (req: Request, res: Response) => {
+  router.get("/analytics/messages", async (req: Request, res: Response) => {
     try {
       const filter = parseAnalyticsFilter(req);
-      const stats = withDb((db) => getMessageStats(db, filter));
+      const stats = await provider.getMessageStats(filter);
       res.json({ messages: stats });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -560,11 +506,10 @@ export function createApiRouter(): Router {
     }
   });
 
-  // GET /api/analytics/session/:id — per-session analytics
-  router.get("/analytics/session/:id", (req: Request, res: Response) => {
+  router.get("/analytics/session/:id", async (req: Request, res: Response) => {
     try {
       const sessionId = String(req.params.id);
-      const analytics = withDb((db) => getSessionAnalytics(db, sessionId));
+      const analytics = await provider.getSessionAnalytics(sessionId);
       if (!analytics) {
         res.status(404).json({ error: "No analytics data for this session" });
         return;
@@ -577,9 +522,9 @@ export function createApiRouter(): Router {
   });
 
   // GET /api/status — DB stats + tool installation status
-  router.get("/status", (_req: Request, res: Response) => {
+  router.get("/status", async (_req: Request, res: Response) => {
     try {
-      const status = getStatus();
+      const status = await getStatusAsync();
       res.json(status);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);

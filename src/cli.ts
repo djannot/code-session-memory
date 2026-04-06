@@ -1579,9 +1579,19 @@ Run ${bold("npx code-session-memory status")} to verify.
 }
 
 function status(): void {
+  const { resolveBackendConfig } = require("./config") as typeof import("./config");
+  let backendConfig: import("./config").DatabaseBackendConfig;
+  try {
+    backendConfig = resolveBackendConfig();
+  } catch {
+    backendConfig = { backend: "sqlite", dbPath: resolveDbPath() };
+  }
+
   console.log(bold("\ncode-session-memory status\n"));
 
-  const dbPath = resolveDbPath();
+  const dbPath = backendConfig.backend === "postgres"
+    ? (backendConfig as import("./config").PostgresBackendConfig).connectionString.replace(/:[^:@]*@/, ":***@")
+    : (backendConfig as import("./config").SqliteBackendConfig).dbPath;
   const mcpPath = getMcpServerPath();
   const openCodeInstalled = isOpenCodeInstalled();
   const claudeInstalled = isClaudeCodeInstalled();
@@ -1647,22 +1657,59 @@ function status(): void {
 
   console.log(bold("\n  Shared"));
   console.log(`  ${ok(fs.existsSync(mcpPath))}  MCP server  ${dim(mcpPath)}`);
-  console.log(`  ${ok(fs.existsSync(dbPath))}  Database    ${dim(dbPath)}`);
 
-  if (fs.existsSync(dbPath)) {
+  if (backendConfig.backend === "postgres") {
+    console.log(`  ${ok(true)}  Database    ${dim(`postgres: ${dbPath}`)}`);
+    // Fetch stats async from Postgres
+    (async () => {
+      try {
+        const { createProvider } = require("./providers") as typeof import("./providers");
+        const provider = await createProvider(backendConfig);
+        try {
+          const overview = await provider.getOverviewStats();
+          const sessions = await provider.listSessions();
+          const totalChunks = sessions.reduce((n: number, s: { chunk_count: number }) => n + s.chunk_count, 0);
+          const sourceMap = new Map<string, number>();
+          for (const s of sessions) sourceMap.set(s.source, (sourceMap.get(s.source) ?? 0) + 1);
+
+          console.log(`\n  ${dim("Backend:          ")}PostgreSQL`);
+          console.log(`  ${dim("Indexed chunks:   ")}${totalChunks}`);
+          console.log(`  ${dim("Sessions tracked: ")}${overview.total_sessions}`);
+          console.log(`  ${dim("Messages:         ")}${overview.total_messages}`);
+          console.log(`  ${dim("Tool calls:       ")}${overview.total_tool_calls}`);
+          for (const [source, count] of sourceMap) {
+            console.log(`    ${dim(`${source}:`)} ${count}`);
+          }
+        } finally {
+          await provider.close();
+        }
+      } catch (err) {
+        console.log(`\n  ${red("Could not connect to PostgreSQL")}: ${err instanceof Error ? err.message : String(err)}`);
+      }
+      // Print allOk after async stats
+      printAllOk();
+    })();
+    return; // allOk will be printed by async block
+  }
+
+  const sqliteDbPath = (backendConfig as import("./config").SqliteBackendConfig).dbPath;
+  console.log(`  ${ok(fs.existsSync(sqliteDbPath))}  Database    ${dim(sqliteDbPath)}`);
+
+  if (fs.existsSync(sqliteDbPath)) {
     try {
-      const db = openDatabase({ dbPath });
+      const db = openDatabase({ dbPath: sqliteDbPath });
       const chunks = (db.prepare("SELECT COUNT(*) as n FROM vec_items").get() as { n: number }).n;
       const sessions = (db.prepare("SELECT COUNT(*) as n FROM sessions_meta").get() as { n: number }).n;
       const bySource = db.prepare(
         "SELECT source, COUNT(*) as n FROM sessions_meta GROUP BY source"
       ).all() as Array<{ source: string; n: number }>;
       db.close();
-      const dbBytes = fs.statSync(dbPath).size;
+      const dbBytes = fs.statSync(sqliteDbPath).size;
       const dbSize = dbBytes >= 1_048_576
         ? `${(dbBytes / 1_048_576).toFixed(1)} MB`
         : `${(dbBytes / 1_024).toFixed(1)} KB`;
-      console.log(`\n  ${dim("DB size:          ")}${dbSize}`);
+      console.log(`\n  ${dim("Backend:          ")}SQLite`);
+      console.log(`  ${dim("DB size:          ")}${dbSize}`);
       console.log(`  ${dim("Indexed chunks:   ")}${chunks}`);
       console.log(`  ${dim("Sessions tracked: ")}${sessions}`);
       for (const row of bySource) {
@@ -1671,44 +1718,47 @@ function status(): void {
     } catch { /* DB might be empty */ }
   }
 
-  const allOk = (!openCodeInstalled || (
-    fs.existsSync(getOpenCodePluginDst()) &&
-    fs.existsSync(getOpenCodeSkillDst()) &&
-    checkMcpConfigured()
-  )) &&
-    (!claudeInstalled || (
-      checkClaudeMcpConfigured() &&
-      checkClaudeHookInstalled() &&
-      checkClaudeSkillInstalled()
-    )) &&
-    (!cursorInstalled || (
-      checkCursorMcpConfigured() &&
-      checkCursorHookInstalled() &&
-      fs.existsSync(getCursorSkillDst())
-    )) &&
-    (!vscodeInstalled || (
-      checkVscodeMcpConfigured() &&
-      checkVscodeHookInstalled() &&
-      checkVscodeHookLocationRegistered()
-    )) &&
-    (!codexInstalled || (
-      checkCodexMcpConfigured() &&
-      checkCodexOpenAiPassthroughConfigured() &&
-      checkCodexHookInstalled() &&
-      fs.existsSync(getCodexSkillDst())
-    )) &&
-    (!geminiInstalled || (
-      checkGeminiMcpConfigured() &&
-      checkGeminiHookInstalled() &&
-      fs.existsSync(getGeminiSkillDst())
-    )) &&
-    fs.existsSync(mcpPath) &&
-    fs.existsSync(dbPath);
+  printAllOk();
 
-  console.log(`\n  ${allOk
-    ? green("All components installed.")
-    : red("Some components missing — run \"npx code-session-memory install\".")
-  }\n`);
+  function printAllOk() {
+    const allOk = (!openCodeInstalled || (
+      fs.existsSync(getOpenCodePluginDst()) &&
+      fs.existsSync(getOpenCodeSkillDst()) &&
+      checkMcpConfigured()
+    )) &&
+      (!claudeInstalled || (
+        checkClaudeMcpConfigured() &&
+        checkClaudeHookInstalled() &&
+        checkClaudeSkillInstalled()
+      )) &&
+      (!cursorInstalled || (
+        checkCursorMcpConfigured() &&
+        checkCursorHookInstalled() &&
+        fs.existsSync(getCursorSkillDst())
+      )) &&
+      (!vscodeInstalled || (
+        checkVscodeMcpConfigured() &&
+        checkVscodeHookInstalled() &&
+        checkVscodeHookLocationRegistered()
+      )) &&
+      (!codexInstalled || (
+        checkCodexMcpConfigured() &&
+        checkCodexOpenAiPassthroughConfigured() &&
+        checkCodexHookInstalled() &&
+        fs.existsSync(getCodexSkillDst())
+      )) &&
+      (!geminiInstalled || (
+        checkGeminiMcpConfigured() &&
+        checkGeminiHookInstalled() &&
+        fs.existsSync(getGeminiSkillDst())
+      )) &&
+      fs.existsSync(mcpPath);
+
+    console.log(`\n  ${allOk
+      ? green("All components installed.")
+      : red("Some components missing — run \"npx code-session-memory install\".")
+    }\n`);
+  }
 }
 
 function uninstall(): void {
@@ -1841,6 +1891,204 @@ async function resetDb(): Promise<void> {
   clack.outro(`${green("Done.")} Database reset — all indexed data removed.`);
 }
 
+// ---------------------------------------------------------------------------
+// config command
+// ---------------------------------------------------------------------------
+
+async function cmdConfig(args: string[]): Promise<void> {
+  const { loadConfigFile, saveConfigFile, getConfigFilePath, resolveBackendConfig } = require("./config");
+  const sub = args[0];
+
+  if (sub === "set-backend") {
+    const backend = args[1];
+    if (backend === "postgres") {
+      const urlIdx = args.indexOf("--url");
+      const url = urlIdx !== -1 ? args[urlIdx + 1] : undefined;
+      if (!url) {
+        console.error("Usage: code-session-memory config set-backend postgres --url <connection_string>");
+        process.exit(1);
+      }
+
+      // Test the connection
+      process.stdout.write("Testing connection... ");
+      try {
+        const pg = require("pg");
+        const pool = new pg.Pool({
+          connectionString: url,
+          ssl: args.includes("--ssl") ? { rejectUnauthorized: false } : undefined,
+          max: 1,
+        });
+        const client = await pool.connect();
+        await client.query("SELECT 1");
+        client.release();
+        await pool.end();
+        console.log("OK");
+      } catch (err: unknown) {
+        console.log("FAILED");
+        console.error(`Connection error: ${err instanceof Error ? err.message : String(err)}`);
+        process.exit(1);
+      }
+
+      // Create schema
+      process.stdout.write("Creating schema... ");
+      try {
+        const { createProvider } = require("./providers");
+        const provider = await createProvider({
+          backend: "postgres",
+          connectionString: url,
+          ssl: args.includes("--ssl"),
+        });
+        await provider.close();
+        console.log("OK");
+      } catch (err: unknown) {
+        console.log("FAILED");
+        console.error(`Schema error: ${err instanceof Error ? err.message : String(err)}`);
+        process.exit(1);
+      }
+
+      // Save config
+      const config = loadConfigFile();
+      config.backend = "postgres";
+      config.postgres = {
+        url,
+        ssl: args.includes("--ssl") || undefined,
+      };
+      saveConfigFile(config);
+      console.log(`Config saved to ${getConfigFilePath()}`);
+      console.log(`\nBackend set to ${bold("postgres")}. Indexers and MCP server will now use PostgreSQL.`);
+      console.log(`Run ${bold("code-session-memory migrate")} to migrate existing SQLite data.`);
+
+    } else if (backend === "sqlite") {
+      const config = loadConfigFile();
+      config.backend = "sqlite";
+      delete config.postgres;
+      saveConfigFile(config);
+      console.log(`Config saved to ${getConfigFilePath()}`);
+      console.log(`Backend set to ${bold("sqlite")}.`);
+
+    } else {
+      console.error('Usage: code-session-memory config set-backend <sqlite|postgres> [--url <url>]');
+      process.exit(1);
+    }
+
+  } else if (sub === "show") {
+    try {
+      const config = resolveBackendConfig();
+      console.log(`Backend: ${bold(config.backend)}`);
+      if (config.backend === "postgres") {
+        const masked = config.connectionString.replace(/:[^:@]*@/, ":***@");
+        console.log(`URL: ${masked}`);
+        console.log(`SSL: ${config.ssl ?? false}`);
+      } else {
+        console.log(`DB path: ${config.dbPath}`);
+      }
+      console.log(`Config file: ${getConfigFilePath()}`);
+    } catch (err: unknown) {
+      console.error(err instanceof Error ? err.message : String(err));
+    }
+
+  } else {
+    console.log(`
+${bold("config")} — Manage the database backend
+
+${bold("Usage:")}
+  code-session-memory config set-backend postgres --url <connection_string> [--ssl]
+  code-session-memory config set-backend sqlite
+  code-session-memory config show
+`);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// migrate command
+// ---------------------------------------------------------------------------
+
+async function cmdMigrate(args: string[]): Promise<void> {
+  const { migrateSqliteToPg, discoverSqliteDbPaths } = require("./migrate/sqlite-to-pg") as typeof import("./migrate/sqlite-to-pg");
+
+  // Parse args
+  const sqlitePaths: string[] = [];
+  let pgUrl: string | undefined;
+  let originHost: string | undefined;
+  let dryRun = false;
+  let batchSize = 100;
+
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg === "--sqlite") {
+      const val = args[++i];
+      if (val) sqlitePaths.push(val);
+    } else if (arg === "--pg-url") {
+      pgUrl = args[++i];
+    } else if (arg === "--origin") {
+      originHost = args[++i];
+    } else if (arg === "--dry-run") {
+      dryRun = true;
+    } else if (arg === "--batch-size") {
+      const val = args[++i];
+      if (val) batchSize = parseInt(val, 10);
+    } else if (arg === "--help" || arg === "-h") {
+      console.log(`
+${bold("migrate")} — Migrate SQLite data to PostgreSQL
+
+${bold("Usage:")}
+  code-session-memory migrate                                  Auto-detect SQLite + use configured Postgres
+  code-session-memory migrate --sqlite <path>                  Specify SQLite DB (repeatable)
+  code-session-memory migrate --pg-url <url>                   Override Postgres URL
+  code-session-memory migrate --origin <hostname>              Label source machine (default: hostname)
+  code-session-memory migrate --dry-run                        Preview without writing
+  code-session-memory migrate --batch-size <n>                 Rows per batch (default: 100)
+
+${bold("Typical flow:")}
+  1. code-session-memory config set-backend postgres --url postgresql://...
+  2. code-session-memory migrate
+`);
+      return;
+    }
+  }
+
+  // Auto-discover SQLite if not specified
+  if (sqlitePaths.length === 0) {
+    const discovered = discoverSqliteDbPaths();
+    if (discovered.length === 0) {
+      console.error("No SQLite databases found. Specify --sqlite <path> explicitly.");
+      process.exit(1);
+    }
+    sqlitePaths.push(...discovered);
+    console.log(`Auto-discovered SQLite DB(s): ${sqlitePaths.join(", ")}`);
+  }
+
+  // Build pg config override if --pg-url was given
+  let pgConfig: import("./config").PostgresBackendConfig | undefined;
+  if (pgUrl) {
+    pgConfig = { backend: "postgres", connectionString: pgUrl };
+  }
+
+  console.log(dryRun ? "DRY RUN — no data will be written\n" : "");
+
+  const report = await migrateSqliteToPg({
+    sqlitePaths,
+    pgConfig,
+    originHost,
+    dryRun,
+    batchSize,
+    onProgress: (ev) => {
+      process.stdout.write(`\r  ${ev.phase}: ${ev.processed}/${ev.total}`);
+      if (ev.processed === ev.total) process.stdout.write("\n");
+    },
+  });
+
+  console.log(`\nMigration ${dryRun ? "(dry run) " : ""}complete:`);
+  console.log(`  Sessions:   ${report.sessions}`);
+  console.log(`  Chunks:     ${report.chunks}`);
+  console.log(`  Messages:   ${report.messages}`);
+  console.log(`  Tool calls: ${report.toolCalls}`);
+}
+
+// ---------------------------------------------------------------------------
+// help
+// ---------------------------------------------------------------------------
+
 function help(): void {
   console.log(`
 ${bold("code-session-memory")} — Shared vector memory for OpenCode, Claude Code, Cursor, VS Code, Codex, and Gemini CLI sessions
@@ -1862,11 +2110,16 @@ ${bold("Usage:")}
   npx code-session-memory sessions purge --days <n>       Delete sessions older than N days (interactive)
   npx code-session-memory sessions purge --days <n> --yes Delete sessions older than N days (no prompt)
   npx code-session-memory web [--port <n>]                Start the web UI (default: port 3333)
+  npx code-session-memory config set-backend <backend>    Set database backend (sqlite or postgres)
+  npx code-session-memory config show                     Show current backend configuration
+  npx code-session-memory migrate                         Migrate SQLite data to PostgreSQL
   npx code-session-memory help                            Show this help
 
 ${bold("Environment variables:")}
   OPENAI_API_KEY            Required for embedding generation
-  OPENCODE_MEMORY_DB_PATH   Override the default DB path
+  OPENCODE_MEMORY_DB_PATH   Override the default SQLite DB path
+  CSM_BACKEND               Override backend (sqlite or postgres)
+  CSM_POSTGRES_URL          PostgreSQL connection string (when CSM_BACKEND=postgres)
   OPENCODE_CONFIG_DIR       Override the OpenCode config directory
   CLAUDE_CONFIG_DIR         Override the Claude Code config directory
   CURSOR_CONFIG_DIR         Override the Cursor config directory (~/.cursor)
@@ -1918,9 +2171,24 @@ switch (cmd) {
       host = webArgs[hostIdx + 1];
     }
     const { startWebServer } = require("./web/server");
-    startWebServer({ port, host });
+    startWebServer({ port, host }).catch((err: Error) => {
+      console.error(err.message);
+      process.exit(1);
+    });
     break;
   }
+  case "config":
+    cmdConfig(process.argv.slice(3)).catch((err) => {
+      console.error(err instanceof Error ? err.message : String(err));
+      process.exit(1);
+    });
+    break;
+  case "migrate":
+    cmdMigrate(process.argv.slice(3)).catch((err) => {
+      console.error(err instanceof Error ? err.message : String(err));
+      process.exit(1);
+    });
+    break;
   case "help":
   case "--help":
   case "-h":        help();      break;

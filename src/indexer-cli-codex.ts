@@ -12,9 +12,10 @@
 import fs from "fs";
 import path from "path";
 import os from "os";
-import { resolveDbPath, openDatabase, getSessionMeta } from "./database";
 import { indexNewMessages } from "./indexer";
 import { codexSessionToMessages, deriveCodexSessionTitle } from "./codex-session-to-messages";
+import { resolveBackendConfig } from "./config";
+import { createProvider } from "./providers";
 
 function getCodexHome(): string {
   return process.env.CODEX_HOME ?? path.join(os.homedir(), ".codex");
@@ -102,14 +103,13 @@ async function main() {
     process.exit(1);
   }
 
-  const dbPath = resolveDbPath();
-  const db = openDatabase({ dbPath });
+  const provider = await createProvider(resolveBackendConfig());
 
   try {
     const messages = codexSessionToMessages(sessionFilePath);
     if (messages.length === 0) return;
 
-    const existingMeta = getSessionMeta(db, threadId);
+    const existingMeta = await provider.getSessionMeta(threadId);
     const title = existingMeta?.session_title
       || deriveCodexSessionTitle(messages, payload["last-assistant-message"]);
 
@@ -119,12 +119,12 @@ async function main() {
       directory: cwd ?? "",
     };
 
-    await indexNewMessages(db, session, messages, "codex", { transcriptPath: sessionFilePath ?? undefined });
+    await indexNewMessages(provider, session, messages, "codex", { transcriptPath: sessionFilePath ?? undefined });
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
     process.stderr.write(`[code-session-memory] Indexing error: ${msg}\n`);
   } finally {
-    db.close();
+    await provider.close();
   }
 }
 

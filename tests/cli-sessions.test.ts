@@ -179,6 +179,7 @@ describe("cmdSessionsList — action menu", () => {
     resetMocks();
     dbPath = makeTempDbPath();
     process.env.OPENCODE_MEMORY_DB_PATH = dbPath;
+    process.env.CSM_BACKEND = "sqlite";
     process.env.OPENAI_API_KEY = "test-key";
 
     // Seed one "claude-code" session into the temp DB.
@@ -192,6 +193,7 @@ describe("cmdSessionsList — action menu", () => {
 
   afterEach(() => {
     delete process.env.OPENCODE_MEMORY_DB_PATH;
+    delete process.env.CSM_BACKEND;
     delete process.env.OPENAI_API_KEY;
   });
 

@@ -203,8 +203,9 @@ describe("cmdQuery", () => {
     process.env.OPENAI_API_KEY = "test-key";
     dbPath = makeTempDbPath();
 
-    // Override DB path via env
+    // Override DB path via env and force SQLite backend (ignore config file)
     process.env.OPENCODE_MEMORY_DB_PATH = dbPath;
+    process.env.CSM_BACKEND = "sqlite";
 
     // Seed the DB with two sessions from different sources
     await indexNewMessages(
