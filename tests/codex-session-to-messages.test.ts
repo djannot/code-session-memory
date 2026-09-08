@@ -82,6 +82,111 @@ describe("codexSessionToMessages", () => {
   });
 });
 
+describe("per-model analytics (turn_context + token_count)", () => {
+  function writeRollout(lines: object[]): string {
+    const dir = path.join(os.tmpdir(), `codex-usage-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    mkdirSync(dir, { recursive: true });
+    const file = path.join(dir, "rollout.jsonl");
+    fs.writeFileSync(file, lines.map((l) => JSON.stringify(l)).join("\n") + "\n");
+    return file;
+  }
+  const ts = "2026-09-08T10:00:00.000Z";
+  const ev = (payload: object) => ({ timestamp: ts, type: "event_msg", payload });
+  const ri = (payload: object) => ({ timestamp: ts, type: "response_item", payload });
+  const answer = (text: string) => ri({ type: "message", role: "assistant", phase: "final_answer", content: [{ type: "output_text", text }] });
+
+  it("attaches the turn's model and the sum of its token_count events to the turn's assistant message", () => {
+    const file = writeRollout([
+      { timestamp: ts, type: "session_meta", payload: { id: "t1" } },
+      ev({ type: "task_started", turn_id: "turn-a" }),
+      { timestamp: ts, type: "turn_context", payload: { turn_id: "turn-a", model: "gpt-5.4" } },
+      ev({ type: "user_message", message: "first question" }),
+      // rate-limit-only event: no usage
+      ev({ type: "token_count", info: null, rate_limits: {} }),
+      ev({ type: "token_count", info: { last_token_usage: { input_tokens: 1000, cached_input_tokens: 600, cache_write_input_tokens: 0, output_tokens: 50, reasoning_output_tokens: 10, total_tokens: 1050 }, total_token_usage: { input_tokens: 1000, cached_input_tokens: 600, output_tokens: 50, reasoning_output_tokens: 10, total_tokens: 1050 } } }),
+      ri({ type: "function_call", name: "exec_command", arguments: "{}", call_id: "c1" }),
+      ri({ type: "function_call_output", call_id: "c1", output: "ok" }),
+      ev({ type: "token_count", info: { last_token_usage: { input_tokens: 2000, cached_input_tokens: 1500, cache_write_input_tokens: 100, output_tokens: 30, reasoning_output_tokens: 0, total_tokens: 2030 }, total_token_usage: { input_tokens: 3000, cached_input_tokens: 2100, cache_write_input_tokens: 100, output_tokens: 80, reasoning_output_tokens: 10, total_tokens: 3080 } } }),
+      answer("first answer"),
+      ev({ type: "task_complete" }),
+      // second turn on another model
+      ev({ type: "task_started", turn_id: "turn-b" }),
+      { timestamp: ts, type: "turn_context", payload: { turn_id: "turn-b", model: "codex-auto-review" } },
+      ev({ type: "user_message", message: "second question" }),
+      ev({ type: "token_count", info: { last_token_usage: { input_tokens: 500, cached_input_tokens: 0, output_tokens: 20, reasoning_output_tokens: 5, total_tokens: 520 } } }),
+      answer("second answer"),
+      ev({ type: "task_complete" }),
+    ]);
+
+    const messages = codexSessionToMessages(file);
+    const assistants = messages.filter((m) => m.info.role === "assistant");
+    expect(assistants).toHaveLength(2);
+
+    const [a, b] = assistants;
+    expect(a.info.modelID).toBe("gpt-5.4");
+    // input = input_tokens - cached - cache_write, summed over the two calls
+    expect(a.info.tokens).toEqual({
+      input: (1000 - 600) + (2000 - 1500 - 100),
+      output: 80,
+      reasoning: 10,
+      total: 3000 + 80,
+      cache: { read: 2100, write: 100 },
+    });
+
+    expect(b.info.modelID).toBe("codex-auto-review");
+    expect(b.info.tokens).toEqual({ input: 500, output: 20, reasoning: 5, total: 520, cache: { read: 0, write: 0 } });
+
+    // user messages never carry a model or usage
+    for (const u of messages.filter((m) => m.info.role === "user")) {
+      expect(u.info.modelID).toBeUndefined();
+      expect(u.info.tokens).toBeUndefined();
+    }
+  });
+
+  it("derives per-call usage from cumulative totals when last_token_usage is absent", () => {
+    const file = writeRollout([
+      ev({ type: "task_started", turn_id: "turn-a" }),
+      { timestamp: ts, type: "turn_context", payload: { model: "gpt-5.3-codex" } },
+      ev({ type: "user_message", message: "q1" }),
+      ev({ type: "token_count", info: { total_token_usage: { input_tokens: 100, cached_input_tokens: 0, output_tokens: 10, reasoning_output_tokens: 0 } } }),
+      answer("a1"),
+      ev({ type: "task_complete" }),
+      ev({ type: "task_started", turn_id: "turn-b" }),
+      ev({ type: "user_message", message: "q2" }),
+      ev({ type: "token_count", info: { total_token_usage: { input_tokens: 400, cached_input_tokens: 50, output_tokens: 25, reasoning_output_tokens: 3 } } }),
+      answer("a2"),
+      ev({ type: "task_complete" }),
+    ]);
+    const [a, b] = codexSessionToMessages(file).filter((m) => m.info.role === "assistant");
+    expect(a.info.tokens).toEqual({ input: 100, output: 10, reasoning: 0, total: 110, cache: { read: 0, write: 0 } });
+    // model persists when a turn has no turn_context of its own
+    expect(b.info.modelID).toBe("gpt-5.3-codex");
+    expect(b.info.tokens).toEqual({ input: 250, output: 15, reasoning: 3, total: 315, cache: { read: 50, write: 0 } });
+  });
+
+  it("does not double count a token_count snapshot that Codex repeats at the end of a turn", () => {
+    const usage = { last_token_usage: { input_tokens: 300, cached_input_tokens: 100, output_tokens: 40, reasoning_output_tokens: 8 }, total_token_usage: { input_tokens: 300, cached_input_tokens: 100, output_tokens: 40, reasoning_output_tokens: 8 } };
+    const file = writeRollout([
+      ev({ type: "task_started", turn_id: "turn-a" }),
+      { timestamp: ts, type: "turn_context", payload: { model: "gpt-6-astra" } },
+      ev({ type: "user_message", message: "q" }),
+      ev({ type: "token_count", info: usage }),
+      ev({ type: "token_count", info: usage }), // identical repeat
+      answer("a"),
+      ev({ type: "task_complete" }),
+    ]);
+    const [a] = codexSessionToMessages(file).filter((m) => m.info.role === "assistant");
+    expect(a.info.tokens).toEqual({ input: 200, output: 40, reasoning: 8, total: 340, cache: { read: 100, write: 0 } });
+  });
+
+  it("leaves model and tokens undefined when the rollout has no turn_context / token_count", () => {
+    const messages = codexSessionToMessages(FIXTURE_PATH);
+    const asst = messages.find((m) => m.info.role === "assistant")!;
+    expect(asst.info.modelID).toBeUndefined();
+    expect(asst.info.tokens).toBeUndefined();
+  });
+});
+
 describe("deriveCodexSessionTitle", () => {
   it("derives title from first user message", () => {
     const messages = codexSessionToMessages(FIXTURE_PATH);

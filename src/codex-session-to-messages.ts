@@ -18,7 +18,7 @@
  */
 
 import fs from "fs";
-import type { FullMessage, MessagePart } from "./types";
+import type { FullMessage, MessagePart, MessageTokens } from "./types";
 
 interface CodexLine {
   timestamp: string;
@@ -30,6 +30,28 @@ interface EventMsgPayload {
   type?: string;
   message?: string;
   turn_id?: string;
+  /** token_count events: `info` is null when the event only carries rate limits. */
+  info?: {
+    /** Usage of the last API call of the turn (one token_count event per call). */
+    last_token_usage?: CodexTokenUsage;
+    /** Cumulative usage for the whole thread. */
+    total_token_usage?: CodexTokenUsage;
+  } | null;
+}
+
+/** `payload.model` of a `turn_context` line — the model configured for that turn. */
+interface TurnContextPayload {
+  turn_id?: string;
+  model?: string;
+}
+
+interface CodexTokenUsage {
+  input_tokens?: number;
+  cached_input_tokens?: number;
+  cache_write_input_tokens?: number;
+  output_tokens?: number;
+  reasoning_output_tokens?: number;
+  total_tokens?: number;
 }
 
 interface FunctionCallPayload {
@@ -96,6 +118,66 @@ export function codexSessionToMessages(filePath: string): FullMessage[] {
   let pendingCommentaryText = "";
   let pendingAgentMessageText = "";
 
+  // Per-model analytics. Codex reports the model once per turn (turn_context)
+  // and token usage once per API call (event_msg/token_count). The parser emits
+  // a single assistant message per turn, so the turn's model and the sum of its
+  // calls' usage are attached to that message.
+  let currentModel: string | undefined;
+  const pendingUsage = { input: 0, cacheRead: 0, cacheWrite: 0, output: 0, reasoning: 0, calls: 0 };
+  let lastCumulativeUsage: CodexTokenUsage | undefined;
+
+  function addTurnUsage(payload: EventMsgPayload): void {
+    const info = payload.info;
+    if (!info) return;
+    let usage: CodexTokenUsage | undefined;
+    const cur = info.total_token_usage;
+    if (cur && lastCumulativeUsage) {
+      // Preferred: delta of the cumulative thread total since the previous
+      // snapshot. Codex sometimes repeats the same token_count at the end of a
+      // turn; the delta is then zero, so the call is not counted twice.
+      const prev = lastCumulativeUsage;
+      usage = {
+        input_tokens: (cur.input_tokens ?? 0) - (prev.input_tokens ?? 0),
+        cached_input_tokens: (cur.cached_input_tokens ?? 0) - (prev.cached_input_tokens ?? 0),
+        cache_write_input_tokens: (cur.cache_write_input_tokens ?? 0) - (prev.cache_write_input_tokens ?? 0),
+        output_tokens: (cur.output_tokens ?? 0) - (prev.output_tokens ?? 0),
+        reasoning_output_tokens: (cur.reasoning_output_tokens ?? 0) - (prev.reasoning_output_tokens ?? 0),
+      };
+    } else {
+      // First snapshot of the file (a resumed thread may carry earlier usage in
+      // its total, so trust the per-call figure), or no cumulative total at all.
+      usage = info.last_token_usage ?? cur;
+    }
+    if (cur) lastCumulativeUsage = cur;
+    if (!usage) return;
+    const contributed = (usage.input_tokens ?? 0) > 0 || (usage.output_tokens ?? 0) > 0;
+    if (!contributed) return;
+    // OpenAI's input_tokens includes cached tokens; split them out so `input`
+    // means fresh input, as it does for Claude Code and OpenCode.
+    const cacheRead = Math.max(0, usage.cached_input_tokens ?? 0);
+    const cacheWrite = Math.max(0, usage.cache_write_input_tokens ?? 0);
+    pendingUsage.input += Math.max(0, (usage.input_tokens ?? 0) - cacheRead - cacheWrite);
+    pendingUsage.cacheRead += cacheRead;
+    pendingUsage.cacheWrite += cacheWrite;
+    pendingUsage.output += Math.max(0, usage.output_tokens ?? 0);
+    pendingUsage.reasoning += Math.max(0, usage.reasoning_output_tokens ?? 0);
+    pendingUsage.calls++;
+  }
+
+  function takePendingTokens(): MessageTokens | undefined {
+    if (pendingUsage.calls === 0) return undefined;
+    const tokens: MessageTokens = {
+      input: pendingUsage.input,
+      output: pendingUsage.output,
+      reasoning: pendingUsage.reasoning,
+      total: pendingUsage.input + pendingUsage.cacheRead + pendingUsage.cacheWrite + pendingUsage.output,
+      cache: { read: pendingUsage.cacheRead, write: pendingUsage.cacheWrite },
+    };
+    pendingUsage.input = pendingUsage.cacheRead = pendingUsage.cacheWrite = 0;
+    pendingUsage.output = pendingUsage.reasoning = pendingUsage.calls = 0;
+    return tokens;
+  }
+
   function flushAssistantMessage(timestamp: string, lineIndex: number): void {
     const assistantText =
       pendingFinalAnswerText ||
@@ -132,14 +214,20 @@ export function codexSessionToMessages(filePath: string): FullMessage[] {
     }
 
     if (parts.length > 0) {
+      const tokens = takePendingTokens();
       messages.push({
         info: {
           id: `${currentTurnId}-assistant-${lineIndex}`,
           role: "assistant",
           time: { created: toTimestampMs(timestamp) },
+          ...(currentModel ? { modelID: currentModel } : {}),
+          ...(tokens ? { tokens } : {}),
         },
         parts,
       });
+    } else {
+      // Nothing to attach the usage to — drop it rather than leak into the next turn.
+      takePendingTokens();
     }
 
     pendingToolCalls.length = 0;
@@ -184,10 +272,20 @@ export function codexSessionToMessages(filePath: string): FullMessage[] {
         if (text) pendingAgentMessageText = text;
       }
 
+      if (payload.type === "token_count") {
+        addTurnUsage(payload);
+      }
+
       if (payload.type === "task_complete") {
         flushAssistantMessage(line.timestamp, lineIndex);
       }
 
+      continue;
+    }
+
+    if (line.type === "turn_context") {
+      const model = (line.payload as TurnContextPayload).model;
+      if (typeof model === "string" && model.trim()) currentModel = model.trim();
       continue;
     }
 

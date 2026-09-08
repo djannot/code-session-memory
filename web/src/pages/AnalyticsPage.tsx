@@ -229,7 +229,7 @@ function ModelComparison({ models, hasMessages }: { models: ModelStat[]; hasMess
       <div className="glass rounded-xl p-5 shadow-sm">
         <h3 className="text-sm font-medium text-gray-700 mb-2">Model Comparison</h3>
         <p className="text-sm text-gray-500">
-          No per-model data yet. Model and token usage are recorded for Claude Code and OpenCode
+          No per-model data yet. Model and token usage are recorded for Claude Code, OpenCode and Codex
           sessions as they are indexed. To fill in sessions indexed before this version, run{" "}
           <code className="font-mono text-xs bg-white/50 rounded px-1 py-0.5">
             npx code-session-memory backfill-analytics
@@ -259,8 +259,12 @@ function ModelComparison({ models, hasMessages }: { models: ModelStat[]; hasMess
         <div>
           <h3 className="text-sm font-medium text-gray-700">Model Comparison</h3>
           <p className="text-xs text-gray-400 mt-0.5">
-            A turn is one user prompt and the assistant messages that follow it. A turn that used
-            several models counts once for each.
+            A turn is one user prompt and everything the assistant did until it stopped. A message
+            is one assistant response inside that turn — Claude Code and OpenCode produce one per
+            model call (typically one per tool use), so a turn chains many; Codex records one per
+            turn. Per-turn averages answer &ldquo;what does one prompt cost&rdquo;, per-message
+            averages answer &ldquo;what does one model call cost&rdquo;. A turn that used several
+            models counts once for each.
           </p>
         </div>
         <div className="flex items-center gap-1 text-xs" role="group" aria-label="Average per">
@@ -314,6 +318,7 @@ function ModelComparison({ models, hasMessages }: { models: ModelStat[]; hasMess
               <th className="font-medium pb-2 px-2">Sessions</th>
               <th className="font-medium pb-2 px-2">Turns</th>
               <th className="font-medium pb-2 px-2">Messages</th>
+              <th className="font-medium pb-2 px-2" title="Assistant messages (model calls) per turn">Msgs /turn</th>
               <th className="font-medium pb-2 px-2" title={`Tool calls per ${per}`}>Tool calls /{per}</th>
               <th className="font-medium pb-2 px-2" title={`Output tokens per ${per} (including reasoning)`}>Output tok /{per}</th>
               <th className="font-medium pb-2 px-2" title={`Context read per ${per}: input + cache read + cache write`}>Context tok /{per}</th>
@@ -348,6 +353,7 @@ function ModelComparison({ models, hasMessages }: { models: ModelStat[]; hasMess
                   <td className="py-2 px-2 font-mono">{m.session_count.toLocaleString()}</td>
                   <td className="py-2 px-2 font-mono">{m.turn_count.toLocaleString()}</td>
                   <td className="py-2 px-2 font-mono">{m.message_count.toLocaleString()}</td>
+                  <td className="py-2 px-2 font-mono">{compact(ratio(m.message_count, m.turn_count))}</td>
                   <td className="py-2 px-2 font-mono">{compact(ratio(m.tool_call_count, d))}</td>
                   <td className="py-2 px-2 font-mono" title={`${m.output_tokens.toLocaleString()} total`}>
                     {noTokens ? "\u2014" : compact(ratio(m.output_tokens, td))}

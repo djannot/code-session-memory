@@ -7,18 +7,19 @@
  * are backfilled automatically by the indexer's upsert, but sessions that are
  * never touched again keep NULL model/token columns until this runs.
  *
- * Supported sources: claude-code (from the JSONL transcript on disk) and
- * opencode (from OpenCode's internal SQLite DB). Other sources are skipped.
+ * Supported sources: claude-code and codex (from the JSONL transcript on disk)
+ * and opencode (from OpenCode's internal SQLite DB). Other sources are skipped.
  */
 
 import type { DatabaseProvider } from "./providers/types";
 import type { FullMessage, SessionSource } from "./types";
 import { extractAnalyticsData } from "./indexer";
 import { parseTranscript } from "./transcript-to-messages";
+import { codexSessionToMessages } from "./codex-session-to-messages";
 import { getMessagesFromOpenCodeDb } from "./opencode-db-to-messages";
 import { resolveTranscriptPath } from "./transcript-discovery";
 
-export const BACKFILL_SOURCES: ReadonlySet<SessionSource> = new Set<SessionSource>(["claude-code", "opencode"]);
+export const BACKFILL_SOURCES: ReadonlySet<SessionSource> = new Set<SessionSource>(["claude-code", "opencode", "codex"]);
 
 export interface BackfillSessionResult {
   sessionId: string;
@@ -54,6 +55,11 @@ function loadMessages(
       const transcriptPath = resolveTranscriptPath(meta as Parameters<typeof resolveTranscriptPath>[0]);
       if (!transcriptPath) return { reason: "Transcript not found on disk" };
       return { messages: parseTranscript(transcriptPath) };
+    }
+    case "codex": {
+      const transcriptPath = resolveTranscriptPath(meta as Parameters<typeof resolveTranscriptPath>[0]);
+      if (!transcriptPath) return { reason: "Rollout file not found on disk" };
+      return { messages: codexSessionToMessages(transcriptPath) };
     }
     case "opencode": {
       const messages = getMessagesFromOpenCodeDb(meta.session_id);
