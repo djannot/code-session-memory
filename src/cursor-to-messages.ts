@@ -20,7 +20,7 @@
  * artifacts — we skip them.
  */
 
-import Database from "better-sqlite3";
+import type Database from "better-sqlite3";
 import path from "path";
 import os from "os";
 import type { FullMessage, MessagePart } from "./types";
@@ -110,7 +110,10 @@ export function resolveCursorDbPath(): string {
 export function openCursorDb(dbPath?: string): Database.Database {
   const resolved = dbPath ?? resolveCursorDbPath();
   // Open read-only — we never write to Cursor's DB
-  return new Database(resolved, { readonly: true, fileMustExist: true });
+  // Lazy require: only the Cursor indexer needs the native module, and only here.
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const BetterSqlite3: typeof Database = require("better-sqlite3");
+  return new BetterSqlite3(resolved, { readonly: true, fileMustExist: true });
 }
 
 /**
