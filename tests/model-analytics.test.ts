@@ -365,15 +365,21 @@ describe("upgrade from a database created before per-model analytics", () => {
         session_id: "cursor_1", session_title: "c", project: "/p", source: "cursor",
         last_indexed_message_id: "x", updated_at: 1,
       });
+      // A Codex session is re-read from its rollout file (fixture has no usage → rows, but no model)
+      await provider.upsertSessionMeta({
+        session_id: "codex_1", session_title: "cx", project: "/p", source: "codex",
+        last_indexed_message_id: "x", updated_at: 1, transcript_path: path.join(FIXTURES, "codex-session.jsonl"),
+      });
 
       const dry = await backfillAnalytics(provider, { dryRun: true });
-      expect(dry.total).toBe(2);
-      expect(dry.updated).toBe(1);
+      expect(dry.total).toBe(3);
+      expect(dry.updated).toBe(2);
       expect(dry.skipped).toBe(1);
       expect((await provider.getModelStats()).length).toBe(0); // dry run wrote nothing
 
       const report = await backfillAnalytics(provider);
-      expect(report.updated).toBe(1);
+      expect(report.updated).toBe(2);
+      expect(report.results.find((r) => r.sessionId === "codex_1")?.messagesWithModel).toBe(0);
       expect(report.results.find((r) => r.sessionId === sessionId)?.messagesWithModel).toBe(
         messages.filter((m) => m.info.role === "assistant").length,
       );
@@ -386,6 +392,10 @@ describe("upgrade from a database created before per-model analytics", () => {
       const none = await backfillAnalytics(provider, { sources: ["opencode"] });
       expect(none.total).toBe(1);
       expect(none.updated).toBe(0);
+      // Codex only
+      const codexOnly = await backfillAnalytics(provider, { sources: ["codex"] });
+      expect(codexOnly.total).toBe(1);
+      expect(codexOnly.updated).toBe(1);
     } finally {
       await provider.close();
     }

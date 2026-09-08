@@ -2161,9 +2161,9 @@ async function cmdBackfillAnalytics(args: string[]): Promise<void> {
     const arg = args[i];
     if (arg === "--source") {
       const val = args[++i];
-      if (val === "claude-code" || val === "opencode") sources.push(val);
+      if (val === "claude-code" || val === "opencode" || val === "codex") sources.push(val);
       else {
-        console.error(`Unsupported source "${val}" — backfill supports claude-code and opencode`);
+        console.error(`Unsupported source "${val}" — backfill supports claude-code, opencode and codex`);
         process.exit(1);
       }
     } else if (arg === "--dry-run") {
@@ -2172,12 +2172,12 @@ async function cmdBackfillAnalytics(args: string[]): Promise<void> {
       console.log(`
 ${bold("backfill-analytics")} — Fill in per-model analytics (model, token usage) for already-indexed sessions
 
-Re-reads Claude Code transcripts and the OpenCode DB and refreshes the
+Re-reads Claude Code / Codex transcripts and the OpenCode DB and refreshes the
 ${bold("messages")} / ${bold("tool_calls")} analytics tables. No embeddings are generated,
 so this is fast and needs no OPENAI_API_KEY. Safe to run more than once.
 
 ${bold("Usage:")}
-  code-session-memory backfill-analytics                       All Claude Code + OpenCode sessions
+  code-session-memory backfill-analytics                       All Claude Code + OpenCode + Codex sessions
   code-session-memory backfill-analytics --source claude-code  One source only (repeatable)
   code-session-memory backfill-analytics --dry-run             Parse and report without writing
 `);
@@ -2206,7 +2206,7 @@ ${bold("Usage:")}
 
     console.log(`
 ${bold("Done.")} ${report.updated} updated, ${report.skipped} skipped, ${report.failed} failed (of ${report.total} sessions).
-${report.skipped > 0 ? dim("Skipped sessions have no transcript on disk anymore (or are not Claude Code / OpenCode).") + "\n" : ""}`);
+${report.skipped > 0 ? dim("Skipped sessions have no transcript on disk anymore (or are not Claude Code / OpenCode / Codex).") + "\n" : ""}`);
   } finally {
     await provider.close();
   }

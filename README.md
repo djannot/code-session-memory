@@ -271,7 +271,7 @@ Open `http://localhost:3333` in your browser. The web UI includes:
 - **Search** — Semantic search with filters (source, date range, result limit)
 - **Sessions** — Browse, filter, and manage all indexed sessions
 - **Session detail** — View all chunks with role badges (User, Assistant, Tool: name), analytics (message counts, tool call breakdown, active duration)
-- **Analytics** — Tool usage, message breakdown, and a per-model comparison (turns, tool calls per turn, output/context tokens per turn, cache hit rate, cost) for Claude Code and OpenCode sessions
+- **Analytics** — Tool usage, message breakdown, and a per-model comparison (turns, tool calls per turn, output/context tokens per turn, cache hit rate, cost) for Claude Code, OpenCode and Codex sessions
 - **Status** — Database stats and per-tool installation status
 - **Delete / Purge** — Remove individual sessions or purge old ones
 
@@ -658,7 +658,7 @@ Alongside vector chunks, the indexer populates two relational tables for structu
 | `input_tokens`, `output_tokens`, `cache_read_tokens`, `cache_write_tokens`, `reasoning_tokens` | Token usage reported by the source (`NULL` when not reported) |
 | `cost` | Cost in USD when the source reports it (OpenCode) |
 
-Model and token usage are captured for **Claude Code** (from `message.usage` in the JSONL transcript) and **OpenCode** (from the message `tokens`/`cost` fields). A single turn can involve several models (e.g. a fallback model), so the model is stored per message; per-turn statistics count such a turn once for each model.
+Model and token usage are captured for **Claude Code** (from `message.usage` in the JSONL transcript), **OpenCode** (from the message `tokens`/`cost` fields) and **Codex** (model from the per-turn `turn_context`, usage summed over the turn's `token_count` events and attached to the turn's assistant message). A single turn can involve several models (e.g. a fallback model), so the model is stored per message; per-turn statistics count such a turn once for each model.
 
 **`tool_calls` table** — one row per tool invocation:
 | Column | Description |
@@ -672,7 +672,7 @@ Model and token usage are captured for **Claude Code** (from `message.usage` in 
 These tables are populated idempotently during Phase 0 of indexing (before chunk/embedding work): every message of the session is re-extracted and upserted on each run, so a session that is continued after an upgrade gets its new columns (model, tokens) filled in for all of its messages. Sessions that are never continued can be filled in without re-embedding:
 
 ```bash
-npx code-session-memory backfill-analytics                      # all Claude Code + OpenCode sessions
+npx code-session-memory backfill-analytics                      # all Claude Code + OpenCode + Codex sessions
 npx code-session-memory backfill-analytics --source claude-code # one source only
 npx code-session-memory backfill-analytics --dry-run            # report without writing
 ```
