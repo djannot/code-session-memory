@@ -18,6 +18,7 @@ import { cursorTranscriptToMessages } from "../cursor-transcript-to-messages";
 import { parseVscodeTranscript } from "../vscode-transcript-to-messages";
 import { codexSessionToMessages, deriveCodexSessionTitle } from "../codex-session-to-messages";
 import { geminiSessionToMessages, deriveGeminiSessionTitle } from "../gemini-session-to-messages";
+import { resolveTranscriptPath } from "../transcript-discovery";
 
 // ---------------------------------------------------------------------------
 // Date helper
@@ -60,96 +61,6 @@ function parseAnalyticsFilter(req: Request): AnalyticsFilter {
     if (ms !== null) filter.toMs = ms;
   }
   return filter;
-}
-
-// ---------------------------------------------------------------------------
-// Transcript path discovery (for re-indexing sessions without a stored path)
-// ---------------------------------------------------------------------------
-
-function discoverClaudeTranscript(sessionId: string): string | null {
-  const claudeDir = path.join(os.homedir(), ".claude", "projects");
-  if (!fs.existsSync(claudeDir)) return null;
-  try {
-    for (const project of fs.readdirSync(claudeDir)) {
-      const candidate = path.join(claudeDir, project, `${sessionId}.jsonl`);
-      if (fs.existsSync(candidate)) return candidate;
-    }
-  } catch { /* ignore */ }
-  return null;
-}
-
-function discoverCodexTranscript(threadId: string): string | null {
-  const sessionsDir = path.join(
-    process.env.CODEX_HOME ?? path.join(os.homedir(), ".codex"),
-    "sessions",
-  );
-  if (!fs.existsSync(sessionsDir)) return null;
-
-  const matches: { path: string; mtime: number }[] = [];
-  function walk(dir: string): void {
-    let entries: fs.Dirent[];
-    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
-    for (const entry of entries) {
-      const fullPath = path.join(dir, entry.name);
-      if (entry.isDirectory()) walk(fullPath);
-      else if (entry.isFile() && entry.name.endsWith(`-${threadId}.jsonl`)) {
-        let mtime = 0;
-        try { mtime = fs.statSync(fullPath).mtimeMs; } catch { /* ignore */ }
-        matches.push({ path: fullPath, mtime });
-      }
-    }
-  }
-  walk(sessionsDir);
-  if (matches.length === 0) return null;
-  matches.sort((a, b) => b.mtime - a.mtime);
-  return matches[0].path;
-}
-
-function discoverGeminiTranscript(sessionId: string): string | null {
-  const tmpRoot = path.join(
-    process.env.GEMINI_CONFIG_DIR ?? path.join(os.homedir(), ".gemini"),
-    "tmp",
-  );
-  if (!fs.existsSync(tmpRoot)) return null;
-
-  const files: { path: string; mtime: number }[] = [];
-  function walk(dir: string): void {
-    let entries: fs.Dirent[];
-    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
-    for (const entry of entries) {
-      const fullPath = path.join(dir, entry.name);
-      if (entry.isDirectory()) walk(fullPath);
-      else if (entry.isFile() && entry.name.startsWith("session-") && entry.name.endsWith(".json")) {
-        let mtime = 0;
-        try { mtime = fs.statSync(fullPath).mtimeMs; } catch { /* ignore */ }
-        files.push({ path: fullPath, mtime });
-      }
-    }
-  }
-  walk(tmpRoot);
-  files.sort((a, b) => b.mtime - a.mtime);
-
-  for (const { path: filePath } of files.slice(0, 200)) {
-    try {
-      const parsed = JSON.parse(fs.readFileSync(filePath, "utf8")) as {
-        sessionId?: string; session_id?: string;
-      };
-      if ((parsed.sessionId ?? parsed.session_id) === sessionId) return filePath;
-    } catch { /* ignore */ }
-  }
-  return null;
-}
-
-function resolveTranscriptPath(meta: SessionMeta): string | null {
-  if (meta.transcript_path && fs.existsSync(meta.transcript_path)) {
-    return meta.transcript_path;
-  }
-  switch (meta.source) {
-    case "claude-code": return discoverClaudeTranscript(meta.session_id);
-    case "codex": return discoverCodexTranscript(meta.session_id);
-    case "gemini-cli": return discoverGeminiTranscript(meta.session_id);
-    default: return null;
-  }
 }
 
 interface ReindexCheckResult {
@@ -489,6 +400,17 @@ export function createApiRouter(provider: DatabaseProvider): Router {
       const filter = parseAnalyticsFilter(req);
       const stats = await provider.getToolUsageStats(filter);
       res.json({ tools: stats });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      res.status(500).json({ error: message });
+    }
+  });
+
+  router.get("/analytics/models", async (req: Request, res: Response) => {
+    try {
+      const filter = parseAnalyticsFilter(req);
+      const stats = await provider.getModelStats(filter);
+      res.json({ models: stats });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       res.status(500).json({ error: message });

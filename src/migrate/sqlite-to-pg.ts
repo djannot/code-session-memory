@@ -234,13 +234,18 @@ export async function migrateSqliteToPg(options: MigrationOptions): Promise<Migr
             for (const r of batch) {
               await client.query(`
                 INSERT INTO messages (id, session_id, role, created_at, text_length,
-                  part_count, tool_call_count, message_order, indexed_at)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                  part_count, tool_call_count, message_order, indexed_at, turn_index,
+                  model, provider, input_tokens, output_tokens, cache_read_tokens,
+                  cache_write_tokens, reasoning_tokens, cost)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
                 ON CONFLICT (session_id, id) DO NOTHING
               `, [
                 r.id, r.session_id, r.role, r.created_at,
                 r.text_length, r.part_count, r.tool_call_count,
-                r.message_order, r.indexed_at,
+                r.message_order, r.indexed_at, r.turn_index ?? 0,
+                r.model ?? null, r.provider ?? null,
+                r.input_tokens ?? null, r.output_tokens ?? null, r.cache_read_tokens ?? null,
+                r.cache_write_tokens ?? null, r.reasoning_tokens ?? null, r.cost ?? null,
               ]);
             }
             options.onProgress?.({ phase: "messages", sqlitePath, processed: Math.min(i + batchSize, allMsgs.length), total: totalMessages });

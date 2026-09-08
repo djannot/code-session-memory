@@ -3,7 +3,7 @@ import type { DatabaseProvider, QueryFilters } from "./types";
 import type {
   DocumentChunk, SessionMeta, QueryResult,
   MessageRow, ToolCallRow, AnalyticsFilter, ToolUsageStat, MessageStat,
-  OverviewStats, SessionAnalytics,
+  OverviewStats, SessionAnalytics, ModelStat,
 } from "../types";
 import type { SessionRow, SessionFilter, ChunkRow } from "../database";
 import type { PostgresBackendConfig } from "../config";
@@ -192,15 +192,36 @@ export class PgDatabaseProvider implements DatabaseProvider {
     try {
       await client.query("BEGIN");
       for (const r of rows) {
+        // Upsert: analytics columns are refreshed on every index run so rows
+        // written before the per-model columns existed get backfilled.
         await client.query(`
           INSERT INTO messages (id, session_id, role, created_at, text_length,
-            part_count, tool_call_count, message_order, indexed_at)
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-          ON CONFLICT (session_id, id) DO NOTHING
+            part_count, tool_call_count, message_order, indexed_at, turn_index,
+            model, provider, input_tokens, output_tokens, cache_read_tokens,
+            cache_write_tokens, reasoning_tokens, cost)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
+          ON CONFLICT (session_id, id) DO UPDATE SET
+            role               = EXCLUDED.role,
+            created_at         = EXCLUDED.created_at,
+            text_length        = EXCLUDED.text_length,
+            part_count         = EXCLUDED.part_count,
+            tool_call_count    = EXCLUDED.tool_call_count,
+            message_order      = EXCLUDED.message_order,
+            turn_index         = EXCLUDED.turn_index,
+            model              = EXCLUDED.model,
+            provider           = EXCLUDED.provider,
+            input_tokens       = EXCLUDED.input_tokens,
+            output_tokens      = EXCLUDED.output_tokens,
+            cache_read_tokens  = EXCLUDED.cache_read_tokens,
+            cache_write_tokens = EXCLUDED.cache_write_tokens,
+            reasoning_tokens   = EXCLUDED.reasoning_tokens,
+            cost               = EXCLUDED.cost
         `, [
           r.id, r.session_id, r.role, r.created_at,
           r.text_length, r.part_count, r.tool_call_count,
-          r.message_order, r.indexed_at,
+          r.message_order, r.indexed_at, r.turn_index,
+          r.model, r.provider, r.input_tokens, r.output_tokens, r.cache_read_tokens,
+          r.cache_write_tokens, r.reasoning_tokens, r.cost,
         ]);
       }
       await client.query("COMMIT");
@@ -557,6 +578,50 @@ export class PgDatabaseProvider implements DatabaseProvider {
       ORDER BY count DESC
     `, params);
     return rows as MessageStat[];
+  }
+
+  async getModelStats(filter?: AnalyticsFilter): Promise<ModelStat[]> {
+    const { clauses, params } = buildAnalyticsWhere(filter, "msg", "m");
+    const { rows } = await this.pool.query(`
+      SELECT
+        msg.model,
+        MAX(msg.provider)                                              AS provider,
+        STRING_AGG(DISTINCT m.source, ',')                             AS sources,
+        COUNT(*)::int                                                  AS message_count,
+        COUNT(DISTINCT msg.session_id || ':' || msg.turn_index)::int   AS turn_count,
+        COUNT(DISTINCT msg.session_id)::int                            AS session_count,
+        COALESCE(SUM(msg.tool_call_count), 0)::int                     AS tool_call_count,
+        SUM(CASE WHEN msg.input_tokens IS NOT NULL
+                   OR msg.output_tokens IS NOT NULL THEN 1 ELSE 0 END)::int AS messages_with_tokens,
+        COALESCE(SUM(msg.input_tokens), 0)::bigint                     AS input_tokens,
+        COALESCE(SUM(msg.output_tokens), 0)::bigint                    AS output_tokens,
+        COALESCE(SUM(msg.cache_read_tokens), 0)::bigint                AS cache_read_tokens,
+        COALESCE(SUM(msg.cache_write_tokens), 0)::bigint               AS cache_write_tokens,
+        COALESCE(SUM(msg.reasoning_tokens), 0)::bigint                 AS reasoning_tokens,
+        SUM(msg.cost)::double precision                                AS cost
+      FROM messages msg
+      JOIN sessions_meta m ON msg.session_id = m.session_id
+      WHERE msg.role = 'assistant' AND msg.model IS NOT NULL${clauses}
+      GROUP BY msg.model
+      ORDER BY message_count DESC
+    `, params);
+    // pg returns BIGINT as strings — normalize to numbers for the API.
+    return rows.map((r) => ({
+      model: r.model as string,
+      provider: (r.provider as string | null) ?? null,
+      sources: (r.sources as string | null) ?? "",
+      message_count: Number(r.message_count),
+      turn_count: Number(r.turn_count),
+      session_count: Number(r.session_count),
+      tool_call_count: Number(r.tool_call_count),
+      messages_with_tokens: Number(r.messages_with_tokens),
+      input_tokens: Number(r.input_tokens),
+      output_tokens: Number(r.output_tokens),
+      cache_read_tokens: Number(r.cache_read_tokens),
+      cache_write_tokens: Number(r.cache_write_tokens),
+      reasoning_tokens: Number(r.reasoning_tokens),
+      cost: r.cost === null || r.cost === undefined ? null : Number(r.cost),
+    }));
   }
 
   async getOverviewStats(filter?: AnalyticsFilter): Promise<OverviewStats> {

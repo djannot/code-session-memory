@@ -18,7 +18,7 @@
  */
 
 import fs from "fs";
-import type { FullMessage, MessagePart } from "./types";
+import type { FullMessage, MessagePart, MessageTokens } from "./types";
 
 // ---------------------------------------------------------------------------
 // IDE context tag stripping
@@ -82,8 +82,18 @@ interface TranscriptAssistantLine {
     model?: string;
     content: TranscriptContentBlock[];
     stop_reason?: string | null;
+    usage?: TranscriptUsage;
   };
   requestId?: string;
+}
+
+/** Token usage as written by Claude Code on every assistant line of one API response. */
+interface TranscriptUsage {
+  input_tokens?: number;
+  output_tokens?: number;
+  cache_creation_input_tokens?: number;
+  cache_read_input_tokens?: number;
+  output_tokens_details?: { thinking_tokens?: number };
 }
 
 interface TranscriptContentBlock {
@@ -216,10 +226,44 @@ function convertAssistantMessage(line: TranscriptAssistantLine): FullMessage | n
     info: {
       id: line.uuid,
       role: "assistant",
-      modelID: line.message.model,
+      modelID: normalizeModel(line.message.model),
+      tokens: usageToTokens(line.message.usage),
       time: { created: new Date(line.timestamp).getTime() },
     },
     parts,
+  };
+}
+
+/**
+ * Claude Code writes placeholder models such as "<synthetic>" for messages it
+ * generates locally (no API call). Those are not real models — drop them.
+ */
+function normalizeModel(model: string | undefined): string | undefined {
+  if (!model) return undefined;
+  const trimmed = model.trim();
+  if (!trimmed || trimmed.startsWith("<")) return undefined;
+  return trimmed;
+}
+
+/**
+ * Converts Claude's `usage` block into the shared MessageTokens shape.
+ * Claude Code repeats the same usage on every JSONL line of one API response
+ * (one line per content block), and parseTranscript keeps a single line per
+ * message.id, so this is counted exactly once per message.
+ */
+function usageToTokens(usage: TranscriptUsage | undefined): MessageTokens | undefined {
+  if (!usage) return undefined;
+  const input = usage.input_tokens ?? 0;
+  const output = usage.output_tokens ?? 0;
+  const cacheRead = usage.cache_read_input_tokens ?? 0;
+  const cacheWrite = usage.cache_creation_input_tokens ?? 0;
+  const reasoning = usage.output_tokens_details?.thinking_tokens ?? 0;
+  return {
+    input,
+    output,
+    reasoning,
+    total: input + output + cacheRead + cacheWrite,
+    cache: { read: cacheRead, write: cacheWrite },
   };
 }
 

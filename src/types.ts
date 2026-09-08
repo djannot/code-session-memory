@@ -56,7 +56,26 @@ export interface MessageInfo {
   role: "user" | "assistant" | "tool";
   time?: { created?: number; completed?: number };
   agent?: string;
+  /** Model that produced this message (assistant messages only), e.g. "claude-opus-5". */
   modelID?: string;
+  /** Provider that served the model (OpenCode only), e.g. "anthropic". */
+  providerID?: string;
+  /** Token usage for this message (assistant messages only). Same shape as OpenCode's REST API. */
+  tokens?: MessageTokens;
+  /** Cost in USD as reported by the source (OpenCode only). */
+  cost?: number;
+}
+
+/**
+ * Token usage for one assistant message. Mirrors the OpenCode REST API shape;
+ * other sources (Claude Code) are normalized into it at parse time.
+ */
+export interface MessageTokens {
+  input?: number;
+  output?: number;
+  reasoning?: number;
+  total?: number;
+  cache?: { read?: number; write?: number };
 }
 
 export interface MessagePart {
@@ -135,6 +154,19 @@ export interface MessageRow {
   tool_call_count: number;
   message_order: number;
   indexed_at: number;
+  /** 0-based turn index: incremented at every user message. All messages of a turn share it. */
+  turn_index: number;
+  /** Model ID for assistant messages (null for user messages or when the source does not report it). */
+  model: string | null;
+  /** Provider ID (OpenCode only). */
+  provider: string | null;
+  input_tokens: number | null;
+  output_tokens: number | null;
+  cache_read_tokens: number | null;
+  cache_write_tokens: number | null;
+  reasoning_tokens: number | null;
+  /** Cost in USD when reported by the source (OpenCode only). */
+  cost: number | null;
 }
 
 /**
@@ -171,6 +203,32 @@ export interface ToolUsageStat {
   call_count: number;
   error_count: number;
   session_count: number;
+}
+
+/**
+ * Per-model statistics returned by getModelStats().
+ * Only assistant messages with a known model are counted.
+ */
+export interface ModelStat {
+  model: string;
+  /** Provider ID when known (OpenCode); null otherwise. */
+  provider: string | null;
+  /** Sources this model was seen in, comma-joined (e.g. "claude-code,opencode"). */
+  sources: string;
+  message_count: number;
+  /** Distinct (session, turn) pairs where this model produced at least one message. */
+  turn_count: number;
+  session_count: number;
+  tool_call_count: number;
+  /** Number of messages that carried token usage (denominator for token averages). */
+  messages_with_tokens: number;
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_tokens: number;
+  cache_write_tokens: number;
+  reasoning_tokens: number;
+  /** Sum of reported costs (USD), or null when no message reported a cost. */
+  cost: number | null;
 }
 
 /**

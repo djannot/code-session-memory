@@ -2,7 +2,7 @@ import type { DatabaseProvider, QueryFilters } from "./types";
 import type {
   DocumentChunk, SessionMeta, QueryResult,
   MessageRow, ToolCallRow, AnalyticsFilter, ToolUsageStat, MessageStat,
-  OverviewStats, SessionAnalytics,
+  OverviewStats, SessionAnalytics, ModelStat,
 } from "../types";
 import type { SessionRow, SessionFilter, ChunkRow, Database } from "../database";
 import {
@@ -25,6 +25,7 @@ import {
   getToolUsageStats as _getToolUsageStats,
   getMessageStats as _getMessageStats,
   getOverviewStats as _getOverviewStats,
+  getModelStats as _getModelStats,
   getSessionAnalytics as _getSessionAnalytics,
 } from "../database";
 import type { SqliteBackendConfig } from "../config";
@@ -158,6 +159,10 @@ export class SqliteDatabaseProvider implements DatabaseProvider {
 
   async getMessageStats(filter?: AnalyticsFilter): Promise<MessageStat[]> {
     return _getMessageStats(this.db, filter);
+  }
+
+  async getModelStats(filter?: AnalyticsFilter): Promise<ModelStat[]> {
+    return _getModelStats(this.db, filter);
   }
 
   async getOverviewStats(filter?: AnalyticsFilter): Promise<OverviewStats> {

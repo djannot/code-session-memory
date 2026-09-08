@@ -36,7 +36,7 @@ interface SessionRow {
 
 interface MessageRow {
   id: string;
-  data: string; // JSON: { role, time, agent, modelID, providerID, ... }
+  data: string; // JSON: { role, time, agent, modelID, providerID, tokens, cost, ... }
 }
 
 interface PartRow {
@@ -104,14 +104,22 @@ export function getMessagesFromOpenCodeDb(
         time?: { created?: number; completed?: number };
         agent?: string;
         modelID?: string;
+        providerID?: string;
+        tokens?: MessageInfo["tokens"];
+        cost?: number;
       };
 
+      // Same fields the REST API returns in `info` — keep them so analytics
+      // (model, token usage, cost) are identical whichever path produced them.
       const info: MessageInfo = {
         id: row.id,
         role: msgData.role,
         time: msgData.time,
         agent: msgData.agent,
         modelID: msgData.modelID,
+        providerID: msgData.providerID,
+        tokens: msgData.tokens,
+        cost: msgData.cost,
       };
 
       const partRows = db!

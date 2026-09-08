@@ -276,7 +276,7 @@ async function indexNewMessagesLegacy(
 // Shared helper: extract analytics rows from messages
 // ---------------------------------------------------------------------------
 
-function extractAnalyticsData(
+export function extractAnalyticsData(
   messages: FullMessage[],
   sessionId: string,
   indexedAt: number,
@@ -284,9 +284,15 @@ function extractAnalyticsData(
   const messageRows: MessageRow[] = [];
   const toolCallRows: ToolCallRow[] = [];
 
+  // A "turn" starts at every user message and includes all assistant messages
+  // that follow it (one turn can involve several models, e.g. a fallback model
+  // or subagent messages, so model is stored per message, not per turn).
+  let turnIndex = -1;
+
   for (let i = 0; i < messages.length; i++) {
     const msg = messages[i];
     const createdAt = msg.info.time?.created ?? null;
+    if (msg.info.role === "user" || turnIndex < 0) turnIndex++;
 
     let textLength = 0;
     let toolCallCount = 0;
@@ -294,6 +300,10 @@ function extractAnalyticsData(
       if (part.type === "text" && part.text) textLength += part.text.length;
       if ((part.type === "tool-invocation" && part.toolName !== "tool_result") || part.type === "tool") toolCallCount++;
     }
+
+    const isAssistant = msg.info.role === "assistant";
+    const tokens = isAssistant ? msg.info.tokens : undefined;
+    const model = isAssistant && msg.info.modelID?.trim() ? msg.info.modelID.trim() : null;
 
     messageRows.push({
       id: msg.info.id,
@@ -305,6 +315,15 @@ function extractAnalyticsData(
       tool_call_count: toolCallCount,
       message_order: i,
       indexed_at: indexedAt,
+      turn_index: turnIndex,
+      model,
+      provider: isAssistant && msg.info.providerID?.trim() ? msg.info.providerID.trim() : null,
+      input_tokens: numOrNull(tokens?.input),
+      output_tokens: numOrNull(tokens?.output),
+      cache_read_tokens: numOrNull(tokens?.cache?.read),
+      cache_write_tokens: numOrNull(tokens?.cache?.write),
+      reasoning_tokens: numOrNull(tokens?.reasoning),
+      cost: isAssistant ? numOrNull(msg.info.cost) : null,
     });
 
     for (const part of msg.parts) {
@@ -345,6 +364,10 @@ function extractAnalyticsData(
   }
 
   return { messageRows, toolCallRows };
+}
+
+function numOrNull(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
 // ---------------------------------------------------------------------------

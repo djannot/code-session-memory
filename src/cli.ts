@@ -2113,6 +2113,7 @@ ${bold("Usage:")}
   npx code-session-memory config set-backend <backend>    Set database backend (sqlite or postgres)
   npx code-session-memory config show                     Show current backend configuration
   npx code-session-memory migrate                         Migrate SQLite data to PostgreSQL
+  npx code-session-memory backfill-analytics              Fill per-model analytics for already-indexed sessions
   npx code-session-memory help                            Show this help
 
 ${bold("Environment variables:")}
@@ -2127,6 +2128,69 @@ ${bold("Environment variables:")}
   CODEX_HOME                Override the Codex home directory (~/.codex)
   GEMINI_CONFIG_DIR         Override the Gemini CLI config directory (~/.gemini)
 `);
+}
+
+// ---------------------------------------------------------------------------
+// backfill-analytics command
+// ---------------------------------------------------------------------------
+
+async function cmdBackfillAnalytics(args: string[]): Promise<void> {
+  const sources: import("./types").SessionSource[] = [];
+  let dryRun = false;
+
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg === "--source") {
+      const val = args[++i];
+      if (val === "claude-code" || val === "opencode") sources.push(val);
+      else {
+        console.error(`Unsupported source "${val}" — backfill supports claude-code and opencode`);
+        process.exit(1);
+      }
+    } else if (arg === "--dry-run") {
+      dryRun = true;
+    } else if (arg === "--help" || arg === "-h") {
+      console.log(`
+${bold("backfill-analytics")} — Fill in per-model analytics (model, token usage) for already-indexed sessions
+
+Re-reads Claude Code transcripts and the OpenCode DB and refreshes the
+${bold("messages")} / ${bold("tool_calls")} analytics tables. No embeddings are generated,
+so this is fast and needs no OPENAI_API_KEY. Safe to run more than once.
+
+${bold("Usage:")}
+  code-session-memory backfill-analytics                       All Claude Code + OpenCode sessions
+  code-session-memory backfill-analytics --source claude-code  One source only (repeatable)
+  code-session-memory backfill-analytics --dry-run             Parse and report without writing
+`);
+      return;
+    }
+  }
+
+  const { resolveBackendConfig } = require("./config") as typeof import("./config");
+  const { createProvider } = require("./providers") as typeof import("./providers");
+  const { backfillAnalytics } = require("./analytics-backfill") as typeof import("./analytics-backfill");
+
+  const provider = await createProvider(resolveBackendConfig());
+  try {
+    console.log(bold(`\ncode-session-memory backfill-analytics${dryRun ? " (dry run)" : ""}\n`));
+    const report = await backfillAnalytics(provider, {
+      sources: sources.length > 0 ? sources : undefined,
+      dryRun,
+      onProgress: (done, total, last) => {
+        const tag = last.status === "updated" ? green("updated") : last.status === "skipped" ? dim("skipped") : red("failed ");
+        const detail = last.status === "updated"
+          ? dim(`${last.messagesWithModel} assistant messages with model`)
+          : dim(last.reason ?? "");
+        console.log(`  [${String(done).padStart(String(total).length)}/${total}] ${tag} ${last.source.padEnd(11)} ${last.sessionId} ${detail}`);
+      },
+    });
+
+    console.log(`
+${bold("Done.")} ${report.updated} updated, ${report.skipped} skipped, ${report.failed} failed (of ${report.total} sessions).
+${report.skipped > 0 ? dim("Skipped sessions have no transcript on disk anymore (or are not Claude Code / OpenCode).") + "\n" : ""}`);
+  } finally {
+    await provider.close();
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -2185,6 +2249,12 @@ switch (cmd) {
     break;
   case "migrate":
     cmdMigrate(process.argv.slice(3)).catch((err) => {
+      console.error(err instanceof Error ? err.message : String(err));
+      process.exit(1);
+    });
+    break;
+  case "backfill-analytics":
+    cmdBackfillAnalytics(process.argv.slice(3)).catch((err) => {
       console.error(err instanceof Error ? err.message : String(err));
       process.exit(1);
     });
