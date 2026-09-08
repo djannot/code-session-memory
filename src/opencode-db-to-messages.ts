@@ -13,7 +13,17 @@
 
 import path from "path";
 import os from "os";
-import Database from "better-sqlite3";
+import type Database from "better-sqlite3";
+
+/**
+ * Loads better-sqlite3 lazily so that processes which never read the OpenCode
+ * DB (e.g. every indexer when the REST API answers, or a PostgreSQL-backed
+ * install) do not load the native module at import time.
+ */
+function loadBetterSqlite3(): typeof Database {
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  return require("better-sqlite3");
+}
 import type { FullMessage, MessageInfo, MessagePart } from "./types";
 
 // ---------------------------------------------------------------------------
@@ -63,7 +73,8 @@ export function getSessionFromOpenCodeDb(
 ): OpenCodeSession | null {
   let db: Database.Database | undefined;
   try {
-    db = new Database(dbPath, { readonly: true, fileMustExist: true });
+    const BetterSqlite3 = loadBetterSqlite3();
+    db = new BetterSqlite3(dbPath, { readonly: true, fileMustExist: true });
     const row = db
       .prepare("SELECT id, title, directory FROM session WHERE id = ?")
       .get(sessionId) as SessionRow | undefined;
@@ -88,7 +99,8 @@ export function getMessagesFromOpenCodeDb(
 ): FullMessage[] | null {
   let db: Database.Database | undefined;
   try {
-    db = new Database(dbPath, { readonly: true, fileMustExist: true });
+    const BetterSqlite3 = loadBetterSqlite3();
+    db = new BetterSqlite3(dbPath, { readonly: true, fileMustExist: true });
 
     const messageRows = db
       .prepare(

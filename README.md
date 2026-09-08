@@ -16,7 +16,7 @@ Only **new messages** are indexed on each turn — previously indexed messages a
 
 ### Prerequisites
 
-- Node.js ≥ 18
+- Node.js ≥ 22 (`better-sqlite3` 13 ships prebuilt Node-API binaries, so no compiler is needed and new Node majors such as 26 work out of the box)
 - An OpenAI API key (for `text-embedding-3-large`)
 - At least one supported tool installed (OpenCode, Claude Code, Cursor, VS Code, Codex, or Gemini CLI)
 

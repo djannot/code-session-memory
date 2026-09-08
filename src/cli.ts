@@ -1441,7 +1441,19 @@ function stepIf(condition: boolean, label: string, fn: () => string): void {
 function install(): void {
   console.log(bold("\ncode-session-memory install\n"));
 
-  const dbPath = resolveDbPath();
+  // Resolve the configured backend first: a PostgreSQL user must never need
+  // the SQLite native module just to install hooks and MCP config.
+  const { resolveBackendConfig } = require("./config") as typeof import("./config");
+  let backendConfig: import("./config").DatabaseBackendConfig;
+  try {
+    backendConfig = resolveBackendConfig();
+  } catch {
+    backendConfig = { backend: "sqlite", dbPath: resolveDbPath() };
+  }
+  const isPostgres = backendConfig.backend === "postgres";
+  const dbPath = isPostgres
+    ? (backendConfig as import("./config").PostgresBackendConfig).connectionString.replace(/:[^:@]*@/, ":***@")
+    : (backendConfig as import("./config").SqliteBackendConfig).dbPath;
   const mcpPath = getMcpServerPath();
   const indexerClaudePath = getIndexerCliClaudePath();
   const indexerCursorPath = getIndexerCliCursorPath();
@@ -1456,12 +1468,19 @@ function install(): void {
   const geminiInstalled = isGeminiInstalled();
 
   // 1. DB
-  step("Initialising database", () => {
-    ensureDir(path.dirname(dbPath));
-    const db = openDatabase({ dbPath });
-    db.close();
-    return dbPath;
-  });
+  if (isPostgres) {
+    // Schema creation and migrations run on every connection (see
+    // PgDatabaseProvider.initialize), and `config set-backend postgres`
+    // already verified the connection — nothing to do here.
+    console.log(`  ${dim("○")}  ${dim("Initialising database")}  ${dim(`(PostgreSQL backend configured: ${dbPath} — skipped)`)}`);
+  } else {
+    step("Initialising database", () => {
+      ensureDir(path.dirname(dbPath));
+      const db = openDatabase({ dbPath });
+      db.close();
+      return dbPath;
+    });
+  }
 
   // OpenCode
   stepIf(openCodeInstalled, "Installing OpenCode plugin", () => {
@@ -1567,7 +1586,7 @@ ${bold("Installation complete!")}
 ${bold("Required environment variable:")}
   OPENAI_API_KEY  — for embedding generation
 
-${bold("Default DB path:")} ${dbPath}
+${bold(isPostgres ? "Database backend:" : "Default DB path:")} ${dbPath}
 
 Restart ${bold("OpenCode")}, ${bold("Claude Code")}, ${bold("Cursor")}, ${bold("VS Code")}, ${bold("Codex")}, and ${bold("Gemini CLI")} to activate.
 

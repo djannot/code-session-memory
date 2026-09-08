@@ -1,7 +1,6 @@
 import path from "path";
 import os from "os";
 import fs from "fs";
-import { execSync, spawnSync } from "child_process";
 import type {
   DocumentChunk, SessionMeta, SessionSource, DatabaseConfig, QueryResult,
   MessageRow, ToolCallRow, AnalyticsFilter, ToolUsageStat, MessageStat,
@@ -59,56 +58,19 @@ function loadDeps() {
       // eslint-disable-next-line @typescript-eslint/no-var-requires
       _Database = require("better-sqlite3");
       // Eagerly open an in-memory DB to force the native .node file to load now,
-      // so any ABI mismatch is caught here inside our try-catch rather than
-      // later in openDatabase() where we have no error handling.
+      // so a broken binary is reported here with a clear message.
       new (_Database as NonNullable<typeof _Database>)(":memory:").close();
     } catch (err: unknown) {
       _Database = null; // reset so a restarted process starts fresh
       const msg = err instanceof Error ? err.message : String(err);
-      const isAbiBroken = msg.includes("NODE_MODULE_VERSION") || msg.includes("Module did not self-register");
-      if (isAbiBroken) {
-        // Auto-rebuild for the current Node version.
-        //
-        // Two subtleties:
-        // 1. Derive the rebuild root from require.resolve so we always target
-        //    the directory that actually contains node_modules/better-sqlite3,
-        //    regardless of installation depth.
-        // 2. Prepend process.execPath's bin dir to PATH so that prebuild-install
-        //    (which shells out to `node` to detect ABI) picks the right version
-        //    instead of whatever `node` happens to be first on the shell PATH.
-        const betterSqlitePkg = require.resolve("better-sqlite3/package.json");
-        const rebuildRoot = path.resolve(betterSqlitePkg, "../../..");
-        const nodeDir = path.dirname(process.execPath);
-        const npmPath = path.join(nodeDir, "npm");
-        const npm = fs.existsSync(npmPath) ? npmPath : "npm";
-        const pathSep = process.platform === "win32" ? ";" : ":";
-        const env = { ...process.env, PATH: `${nodeDir}${pathSep}${process.env.PATH ?? ""}` };
-        try {
-          process.stderr.write("[code-session-memory] Rebuilding better-sqlite3 for current Node version...\n");
-          execSync(`"${npm}" rebuild better-sqlite3`, { cwd: rebuildRoot, stdio: "pipe", env });
-        } catch (rebuildErr: unknown) {
-          const rebuildMsg = rebuildErr instanceof Error ? rebuildErr.message : String(rebuildErr);
-          throw new Error(
-            `better-sqlite3 auto-rebuild failed: ${rebuildMsg}\n` +
-            `Try manually: cd ${rebuildRoot} && "${npm}" rebuild better-sqlite3`,
-          );
-        }
-        // In test environments (vitest/jest), calling process.exit() kills the
-        // worker process. The rebuild above fixed the binary on disk — just ask
-        // the user to re-run the tests.
-        if (process.env.VITEST || process.env.JEST_WORKER_ID) {
-          throw new Error(
-            `better-sqlite3 was rebuilt for Node ${process.version}. Please re-run the tests.`,
-          );
-        }
-        // In CLI processes: native modules can't be reloaded after a failed dlopen,
-        // so re-execute the process fresh with a clean module cache.
-        process.stderr.write("[code-session-memory] Restarting to apply rebuild...\n");
-        const result = spawnSync(process.execPath, process.argv.slice(1), { stdio: "inherit" });
-        process.exit(result.status ?? 0);
-      } else {
-        throw err;
-      }
+      // better-sqlite3 >= 12 ships Node-API prebuilt binaries inside the npm
+      // package, so a load failure means the install is broken (unsupported
+      // platform, corrupted npx cache, or Node older than the supported range).
+      throw new Error(
+        `Failed to load better-sqlite3 (Node ${process.version}, ${process.platform}-${process.arch}): ${msg}\n` +
+        `code-session-memory requires Node >= 22. If Node is recent, reinstall the package ` +
+        `(for npx: rm -rf ~/.npm/_npx, then run the command again).`,
+      );
     }
   }
   if (!_sqliteVec) {
