@@ -1,7 +1,7 @@
 import type {
   DocumentChunk, SessionMeta, SessionSource, QueryResult,
   MessageRow, ToolCallRow, AnalyticsFilter, ToolUsageStat, MessageStat,
-  OverviewStats, SessionAnalytics,
+  OverviewStats, SessionAnalytics, ModelStat,
 } from "../types";
 import type { SectionFilterOptions, SessionRow, SessionFilter, ChunkRow } from "../database";
 
@@ -72,6 +72,7 @@ export interface DatabaseProvider {
   // -- Analytics queries ------------------------------------------------------
   getToolUsageStats(filter?: AnalyticsFilter): Promise<ToolUsageStat[]>;
   getMessageStats(filter?: AnalyticsFilter): Promise<MessageStat[]>;
+  getModelStats(filter?: AnalyticsFilter): Promise<ModelStat[]>;
   getOverviewStats(filter?: AnalyticsFilter): Promise<OverviewStats>;
   getSessionAnalytics(sessionId: string): Promise<SessionAnalytics | null>;
 

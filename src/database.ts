@@ -5,7 +5,7 @@ import { execSync, spawnSync } from "child_process";
 import type {
   DocumentChunk, SessionMeta, SessionSource, DatabaseConfig, QueryResult,
   MessageRow, ToolCallRow, AnalyticsFilter, ToolUsageStat, MessageStat,
-  OverviewStats, SessionAnalytics,
+  OverviewStats, SessionAnalytics, ModelStat,
 } from "./types";
 
 const DEFAULT_EMBEDDING_DIMENSION = 3072;
@@ -141,6 +141,22 @@ export function openDatabase(config: DatabaseConfig): Database {
 }
 
 /**
+ * Columns added to `messages` after its initial release (per-model analytics).
+ * Kept in one place so the CREATE TABLE and the ALTER TABLE migration agree.
+ */
+const MESSAGES_ANALYTICS_COLUMNS: ReadonlyArray<readonly [string, string]> = [
+  ["turn_index", "INTEGER NOT NULL DEFAULT 0"],
+  ["model", "TEXT"],
+  ["provider", "TEXT"],
+  ["input_tokens", "INTEGER"],
+  ["output_tokens", "INTEGER"],
+  ["cache_read_tokens", "INTEGER"],
+  ["cache_write_tokens", "INTEGER"],
+  ["reasoning_tokens", "INTEGER"],
+  ["cost", "REAL"],
+];
+
+/**
  * Creates the schema tables if they don't already exist.
  * Exported so tests can call it with an in-memory DB.
  */
@@ -225,6 +241,17 @@ export function initSchema(db: Database, embeddingDimension = DEFAULT_EMBEDDING_
   db.exec(`CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id)`);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_messages_role ON messages(role)`);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_messages_created ON messages(created_at)`);
+
+  // Migrate existing DBs: per-model analytics columns (model + token usage).
+  // Each ALTER is idempotent: it throws "duplicate column" when already present.
+  for (const [column, type] of MESSAGES_ANALYTICS_COLUMNS) {
+    try {
+      db.exec(`ALTER TABLE messages ADD COLUMN ${column} ${type}`);
+    } catch {
+      // Column already exists — ignore
+    }
+  }
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_messages_model ON messages(model)`);
 
   db.exec(`
     CREATE TABLE IF NOT EXISTS tool_calls (
@@ -355,16 +382,37 @@ export function insertChunks(
 // ---------------------------------------------------------------------------
 
 /**
- * Batch-inserts message rows. Duplicate (session_id, id) pairs are silently
- * skipped via INSERT OR IGNORE (idempotent for incremental indexing).
+ * Batch-upserts message rows. Existing (session_id, id) pairs get their
+ * analytics columns refreshed (idempotent for incremental indexing). The
+ * indexer re-extracts every message of a session on each run, so rows written
+ * before the per-model columns existed are backfilled the next time the
+ * session is indexed. `indexed_at` keeps its original value.
  */
 export function insertMessages(db: Database, rows: MessageRow[]): void {
   if (rows.length === 0) return;
   const stmt = db.prepare(`
-    INSERT OR IGNORE INTO messages
+    INSERT INTO messages
       (id, session_id, role, created_at, text_length, part_count,
-       tool_call_count, message_order, indexed_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+       tool_call_count, message_order, indexed_at, turn_index, model, provider,
+       input_tokens, output_tokens, cache_read_tokens, cache_write_tokens,
+       reasoning_tokens, cost)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(session_id, id) DO UPDATE SET
+      role               = excluded.role,
+      created_at         = excluded.created_at,
+      text_length        = excluded.text_length,
+      part_count         = excluded.part_count,
+      tool_call_count    = excluded.tool_call_count,
+      message_order      = excluded.message_order,
+      turn_index         = excluded.turn_index,
+      model              = excluded.model,
+      provider           = excluded.provider,
+      input_tokens       = excluded.input_tokens,
+      output_tokens      = excluded.output_tokens,
+      cache_read_tokens  = excluded.cache_read_tokens,
+      cache_write_tokens = excluded.cache_write_tokens,
+      reasoning_tokens   = excluded.reasoning_tokens,
+      cost               = excluded.cost
   `);
   const insertMany = db.transaction((...args: unknown[]) => {
     const items = args[0] as MessageRow[];
@@ -372,7 +420,9 @@ export function insertMessages(db: Database, rows: MessageRow[]): void {
       stmt.run(
         r.id, r.session_id, r.role, r.created_at,
         r.text_length, r.part_count, r.tool_call_count,
-        r.message_order, r.indexed_at,
+        r.message_order, r.indexed_at, r.turn_index, r.model, r.provider,
+        r.input_tokens, r.output_tokens, r.cache_read_tokens, r.cache_write_tokens,
+        r.reasoning_tokens, r.cost,
       );
     }
   });
@@ -915,6 +965,40 @@ export function getMessageStats(
     GROUP BY msg.role
     ORDER BY count DESC
   `).all(...params) as MessageStat[];
+}
+
+/**
+ * Returns per-model statistics over assistant messages that carry a model.
+ * A turn that involved several models is counted once for each of them.
+ */
+export function getModelStats(
+  db: Database,
+  filter?: AnalyticsFilter,
+): ModelStat[] {
+  const { clauses, params } = buildAnalyticsWhere(filter, "msg", "m");
+  return db.prepare(`
+    SELECT
+      msg.model,
+      MAX(msg.provider)                                          AS provider,
+      GROUP_CONCAT(DISTINCT m.source)                            AS sources,
+      COUNT(*)                                                   AS message_count,
+      COUNT(DISTINCT msg.session_id || ':' || msg.turn_index)    AS turn_count,
+      COUNT(DISTINCT msg.session_id)                             AS session_count,
+      COALESCE(SUM(msg.tool_call_count), 0)                      AS tool_call_count,
+      SUM(CASE WHEN msg.input_tokens IS NOT NULL
+                 OR msg.output_tokens IS NOT NULL THEN 1 ELSE 0 END) AS messages_with_tokens,
+      COALESCE(SUM(msg.input_tokens), 0)                         AS input_tokens,
+      COALESCE(SUM(msg.output_tokens), 0)                        AS output_tokens,
+      COALESCE(SUM(msg.cache_read_tokens), 0)                    AS cache_read_tokens,
+      COALESCE(SUM(msg.cache_write_tokens), 0)                   AS cache_write_tokens,
+      COALESCE(SUM(msg.reasoning_tokens), 0)                     AS reasoning_tokens,
+      SUM(msg.cost)                                              AS cost
+    FROM messages msg
+    JOIN sessions_meta m ON msg.session_id = m.session_id
+    WHERE msg.role = 'assistant' AND msg.model IS NOT NULL${clauses}
+    GROUP BY msg.model
+    ORDER BY message_count DESC
+  `).all(...params) as ModelStat[];
 }
 
 /**

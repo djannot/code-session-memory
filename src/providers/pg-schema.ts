@@ -82,6 +82,15 @@ CREATE TABLE IF NOT EXISTS messages (
   tool_call_count INTEGER NOT NULL DEFAULT 0,
   message_order   INTEGER NOT NULL DEFAULT 0,
   indexed_at      BIGINT NOT NULL,
+  turn_index      INTEGER NOT NULL DEFAULT 0,
+  model           TEXT,
+  provider        TEXT,
+  input_tokens    BIGINT,
+  output_tokens   BIGINT,
+  cache_read_tokens  BIGINT,
+  cache_write_tokens BIGINT,
+  reasoning_tokens   BIGINT,
+  cost            DOUBLE PRECISION,
   PRIMARY KEY (session_id, id)
 );
 CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id);
@@ -108,9 +117,40 @@ CREATE INDEX IF NOT EXISTS idx_tool_calls_message ON tool_calls(session_id, mess
 `;
 }
 
+/** Per-model analytics columns added to `messages` after its initial release. */
+const MESSAGES_ANALYTICS_COLUMNS: ReadonlyArray<readonly [string, string]> = [
+  ["turn_index", "INTEGER NOT NULL DEFAULT 0"],
+  ["model", "TEXT"],
+  ["provider", "TEXT"],
+  ["input_tokens", "BIGINT"],
+  ["output_tokens", "BIGINT"],
+  ["cache_read_tokens", "BIGINT"],
+  ["cache_write_tokens", "BIGINT"],
+  ["reasoning_tokens", "BIGINT"],
+  ["cost", "DOUBLE PRECISION"],
+];
+
+function addColumnIfMissing(table: string, column: string, type: string): string {
+  return `
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_name = '${table}' AND column_name = '${column}'
+  ) THEN
+    ALTER TABLE ${table} ADD COLUMN ${column} ${type};
+  END IF;
+END $$;
+`;
+}
+
 /** Migrations to run on an existing schema. */
 export function getMigrationsSQL(): string {
   return `
+-- Per-model analytics columns on messages (model + token usage)
+${MESSAGES_ANALYTICS_COLUMNS.map(([c, t]) => addColumnIfMissing("messages", c, t)).join("")}
+CREATE INDEX IF NOT EXISTS idx_messages_model ON messages(model);
+
 -- Add origin_host column if missing (for multi-desktop merge tracking)
 DO $$
 BEGIN

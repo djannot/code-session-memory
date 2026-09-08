@@ -203,6 +203,23 @@ export interface MessageStat {
   count: number;
 }
 
+export interface ModelStat {
+  model: string;
+  provider: string | null;
+  sources: string;
+  message_count: number;
+  turn_count: number;
+  session_count: number;
+  tool_call_count: number;
+  messages_with_tokens: number;
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_tokens: number;
+  cache_write_tokens: number;
+  reasoning_tokens: number;
+  cost: number | null;
+}
+
 export interface OverviewStats {
   total_sessions: number;
   total_messages: number;
@@ -242,6 +259,11 @@ export async function getAnalyticsOverview(params?: AnalyticsParams): Promise<Ov
 
 export async function getAnalyticsTools(params?: AnalyticsParams): Promise<{ tools: ToolUsageStat[] }> {
   const res = await fetch(`${BASE}/analytics/tools${analyticsQuery(params)}`);
+  return handleResponse(res);
+}
+
+export async function getAnalyticsModels(params?: AnalyticsParams): Promise<{ models: ModelStat[] }> {
+  const res = await fetch(`${BASE}/analytics/models${analyticsQuery(params)}`);
   return handleResponse(res);
 }
 

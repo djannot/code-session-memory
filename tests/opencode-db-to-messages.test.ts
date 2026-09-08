@@ -78,6 +78,9 @@ function createTestOpenCodeDb(dbPath: string) {
     time: { created: 1003, completed: 1010 },
     agent: "build",
     modelID: "claude-sonnet-4-6@default",
+    providerID: "anthropic",
+    cost: 0.0058191,
+    tokens: { total: 12751, input: 2, output: 55, reasoning: 0, cache: { read: 12352, write: 342 } },
   }));
 
   db.prepare(`
@@ -163,6 +166,18 @@ describe("getMessagesFromOpenCodeDb", () => {
     expect(asst.info.role).toBe("assistant");
     expect(asst.info.modelID).toBe("claude-sonnet-4-6@default");
     expect(asst.info.time?.completed).toBe(1010);
+  });
+
+  it("carries provider, token usage and cost for analytics (same fields as the REST API)", () => {
+    const messages = getMessagesFromOpenCodeDb("ses_test_001", dbPath);
+    const asst = messages![1];
+    expect(asst.info.providerID).toBe("anthropic");
+    expect(asst.info.cost).toBeCloseTo(0.0058191, 7);
+    expect(asst.info.tokens).toEqual({ total: 12751, input: 2, output: 55, reasoning: 0, cache: { read: 12352, write: 342 } });
+
+    const user = messages![0];
+    expect(user.info.tokens).toBeUndefined();
+    expect(user.info.cost).toBeUndefined();
   });
 
   it("attaches parts to each message in order", () => {

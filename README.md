@@ -271,6 +271,7 @@ Open `http://localhost:3333` in your browser. The web UI includes:
 - **Search** — Semantic search with filters (source, date range, result limit)
 - **Sessions** — Browse, filter, and manage all indexed sessions
 - **Session detail** — View all chunks with role badges (User, Assistant, Tool: name), analytics (message counts, tool call breakdown, active duration)
+- **Analytics** — Tool usage, message breakdown, and a per-model comparison (turns, tool calls per turn, output/context tokens per turn, cache hit rate, cost) for Claude Code and OpenCode sessions
 - **Status** — Database stats and per-tool installation status
 - **Delete / Purge** — Remove individual sessions or purge old ones
 
@@ -652,6 +653,12 @@ Alongside vector chunks, the indexer populates two relational tables for structu
 | `text_length` | Character count of text parts |
 | `tool_call_count` | Number of tool invocations in this message |
 | `message_order` | Position within the session |
+| `turn_index` | Turn number: incremented at every user message, shared by the assistant messages that follow |
+| `model`, `provider` | Model that produced an assistant message (e.g. `claude-opus-5`) and, for OpenCode, the provider |
+| `input_tokens`, `output_tokens`, `cache_read_tokens`, `cache_write_tokens`, `reasoning_tokens` | Token usage reported by the source (`NULL` when not reported) |
+| `cost` | Cost in USD when the source reports it (OpenCode) |
+
+Model and token usage are captured for **Claude Code** (from `message.usage` in the JSONL transcript) and **OpenCode** (from the message `tokens`/`cost` fields). A single turn can involve several models (e.g. a fallback model), so the model is stored per message; per-turn statistics count such a turn once for each model.
 
 **`tool_calls` table** — one row per tool invocation:
 | Column | Description |
@@ -662,7 +669,15 @@ Alongside vector chunks, the indexer populates two relational tables for structu
 | `args_length` | Size of the serialized input |
 | `result_length` | Size of the serialized output |
 
-These tables are populated idempotently during Phase 0 of indexing (before chunk/embedding work), so they are backfilled even for sessions indexed before the analytics tables existed.
+These tables are populated idempotently during Phase 0 of indexing (before chunk/embedding work): every message of the session is re-extracted and upserted on each run, so a session that is continued after an upgrade gets its new columns (model, tokens) filled in for all of its messages. Sessions that are never continued can be filled in without re-embedding:
+
+```bash
+npx code-session-memory backfill-analytics                      # all Claude Code + OpenCode sessions
+npx code-session-memory backfill-analytics --source claude-code # one source only
+npx code-session-memory backfill-analytics --dry-run            # report without writing
+```
+
+The schema upgrade itself is automatic on both backends: the new columns are added the first time the new version opens the database (SQLite `ALTER TABLE`, Postgres idempotent migration).
 
 **Per-session analytics** (shown in the web UI session detail):
 - Message counts by role (User, Assistant)
@@ -675,6 +690,7 @@ These tables are populated idempotently during Phase 0 of indexing (before chunk
 | `GET /api/analytics/overview` | Aggregate totals across all sessions |
 | `GET /api/analytics/tools` | Tool usage stats (filterable by source, date range) |
 | `GET /api/analytics/messages` | Message counts by role |
+| `GET /api/analytics/models` | Per-model stats: messages, turns, sessions, tool calls, token usage, cost (filterable by source, date range) |
 | `GET /api/analytics/session/:id` | Per-session analytics detail |
 
 ### MCP server
