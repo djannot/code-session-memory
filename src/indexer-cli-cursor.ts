@@ -33,8 +33,14 @@ import {
 import { cursorTranscriptToMessages } from "./cursor-transcript-to-messages";
 import { resolveBackendConfig } from "./config";
 import { createProvider } from "./providers";
+import { bootstrapHook, logHookError, logHookRun } from "./hook-runtime";
+
+const HOOK_SOURCE = "cursor";
 
 async function main() {
+  // Repair the environment when a GUI-launched host gave us a bare one.
+  bootstrapHook(HOOK_SOURCE);
+
   // Read JSON payload from stdin
   const chunks: Buffer[] = [];
   for await (const chunk of process.stdin) {
@@ -51,7 +57,7 @@ async function main() {
   try {
     payload = JSON.parse(Buffer.concat(chunks).toString("utf8"));
   } catch (err) {
-    process.stderr.write(`[code-session-memory] Failed to parse stdin: ${err}\n`);
+    logHookError(HOOK_SOURCE, `Failed to parse stdin: ${err}`);
     process.exit(1);
   }
 
@@ -62,12 +68,12 @@ async function main() {
   } = payload;
 
   if (!composerId) {
-    process.stderr.write("[code-session-memory] Missing conversation_id in hook payload\n");
+    logHookError(HOOK_SOURCE, "Missing conversation_id in hook payload");
     process.exit(1);
   }
 
   if (!transcriptPath) {
-    process.stderr.write("[code-session-memory] Missing transcript_path in hook payload — cannot index\n");
+    logHookError(HOOK_SOURCE, "Missing transcript_path in hook payload — cannot index");
     return;
   }
 
@@ -80,9 +86,7 @@ async function main() {
   const transcriptMessages = cursorTranscriptToMessages(transcriptPath, composerId);
 
   if (transcriptMessages.length === 0) {
-    process.stderr.write(
-      `[code-session-memory] No messages in transcript: ${transcriptPath}\n`,
-    );
+    logHookError(HOOK_SOURCE, `No messages in transcript: ${transcriptPath}`);
     return;
   }
 
@@ -135,16 +139,17 @@ async function main() {
       directory: projectDir,
     };
 
-    await indexNewMessages(provider, session, messages, "cursor", { transcriptPath: transcriptPath ?? undefined });
+    const result = await indexNewMessages(provider, session, messages, "cursor", { transcriptPath: transcriptPath ?? undefined });
+    logHookRun(HOOK_SOURCE, `session ${composerId}: ${result.indexed} chunk(s) indexed, ${result.skipped} skipped`);
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
-    process.stderr.write(`[code-session-memory] Indexing error: ${msg}\n`);
+    logHookError(HOOK_SOURCE, `Indexing error: ${msg}`);
   } finally {
     await provider.close();
   }
 }
 
 main().catch((err) => {
-  process.stderr.write(`[code-session-memory] Fatal: ${err}\n`);
+  logHookError(HOOK_SOURCE, `Fatal: ${err}`);
   process.exit(1);
 });

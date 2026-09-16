@@ -62,12 +62,15 @@ The `install` command sets up everything for all detected tools on your machine:
 **All tools share:**
 - The same database at `~/.local/share/code-session-memory/sessions.db`
 - The same MCP server for querying past sessions
+- The absolute path of the `node` binary that ran the install (hooks never rely on `PATH`)
+- An environment snapshot at `~/.config/code-session-memory/env.json` (mode `0600`)
+- A hook log at `~/.config/code-session-memory/logs/hook.log`
 
 Then **restart OpenCode / Claude Code / Cursor / VS Code / Codex / Gemini CLI** to activate.
 
 > **VS Code note:** Ensure **Chat: Use Hooks** is enabled in VS Code settings (it is by default in VS Code 1.109.3+).
 >
-> **Codex note:** The install command sets `notify = ["node", ".../indexer-cli-codex.js"]` and MCP env passthrough `["OPENAI_API_KEY"]` in `~/.codex/config.toml`.
+> **Codex note:** The install command sets `notify = ["/abs/path/to/node", ".../indexer-cli-codex.js"]` and MCP env passthrough `["OPENAI_API_KEY"]` in `~/.codex/config.toml`.
 >
 > **Gemini CLI note:** The install command sets an `AfterAgent` hook invoking `indexer-cli-gemini.js` in `~/.gemini/settings.json`.
 
@@ -77,7 +80,49 @@ Then **restart OpenCode / Claude Code / Cursor / VS Code / Codex / Gemini CLI** 
 export OPENAI_API_KEY=sk-...
 ```
 
-Add this to your shell profile (`.bashrc`, `.zshrc`, etc.) so it's always available.
+Add this to your shell profile (`.bashrc`, `.zshrc`, etc.) so it's always available,
+and run `npx code-session-memory install` from a shell where it is exported.
+
+### Desktop apps (Claude desktop, Cursor, VS Code)
+
+Apps started from the GUI — the Dock, the Start menu, a desktop launcher — do not
+inherit your shell environment: on macOS `launchd` gives them
+`PATH=/usr/bin:/bin:/usr/sbin:/sbin` and nothing you exported from `.zshrc`.
+Hooks inherit that same bare environment, and hosts discard hook stderr, so a
+hook that cannot find `node` or `OPENAI_API_KEY` used to fail invisibly.
+
+Install handles both halves of this, on every platform:
+
+1. **`node` is recorded as an absolute path** in every hook command and MCP
+   server entry, so `PATH` never matters.
+2. **The variables hooks need are snapshotted** to
+   `~/.config/code-session-memory/env.json` (mode `0600`), and every entry point
+   merges that file into its environment. Variables the host *does* provide
+   always win.
+
+If the snapshot is missing the API key, a hook asks your login shell for it once
+(POSIX only, with a short timeout) and saves what it finds. A probe that comes
+back empty is not retried for six hours, so a misconfigured setup never slows
+down every turn.
+
+Set or inspect the snapshot at any time:
+
+```bash
+npx code-session-memory config set-env OPENAI_API_KEY=sk-...
+npx code-session-memory config set-env OPENAI_API_KEY   # copy from this shell
+npx code-session-memory config env
+```
+
+Restart the desktop app fully (quit, not just close the window) after installing.
+
+### When indexing seems to have stopped
+
+`npx code-session-memory status` ends with a **Runtime** section that reports the
+node binary baked into the configs (flagging one that no longer exists, e.g.
+after an `nvm` upgrade), the contents of the env snapshot, and the last hook run
+and last hook error. The full history is in
+`~/.config/code-session-memory/logs/hook.log` — that file is the only trace hooks
+leave, since hosts discard their stderr.
 
 ## Usage
 
@@ -304,7 +349,7 @@ Show me how we solved the TypeScript config issue.
 
 | Variable | Default | Description |
 |---|---|---|
-| `OPENAI_API_KEY` | — | **Required.** Used for embedding generation and session compaction. |
+| `OPENAI_API_KEY` | — | **Required.** Used for embedding generation and session compaction. Recorded in the env snapshot at install time for GUI-launched apps. |
 | `OPENCODE_MEMORY_DB_PATH` | `~/.local/share/code-session-memory/sessions.db` | Override the database path. |
 | `OPENCODE_CONFIG_DIR` | `~/.config/opencode` | Override the OpenCode config directory. |
 | `CLAUDE_CONFIG_DIR` | `~/.claude` | Override the Claude Code config directory. |

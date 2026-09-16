@@ -16,6 +16,9 @@ import { parseTranscript, deriveSessionTitle } from "./transcript-to-messages";
 import type { FullMessage } from "./types";
 import { resolveBackendConfig } from "./config";
 import { createProvider } from "./providers";
+import { bootstrapHook, logHookError, logHookRun } from "./hook-runtime";
+
+const HOOK_SOURCE = "claude-code";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -33,6 +36,9 @@ function transcriptIncomplete(messages: FullMessage[]): boolean {
 }
 
 async function main() {
+  // Repair the environment when a GUI-launched host gave us a bare one.
+  bootstrapHook(HOOK_SOURCE);
+
   // Read JSON payload from stdin
   const chunks: Buffer[] = [];
   for await (const chunk of process.stdin) {
@@ -43,14 +49,14 @@ async function main() {
   try {
     payload = JSON.parse(Buffer.concat(chunks).toString("utf8"));
   } catch (err) {
-    process.stderr.write(`[code-session-memory] Failed to parse stdin: ${err}\n`);
+    logHookError(HOOK_SOURCE, `Failed to parse stdin: ${err}`);
     process.exit(1);
   }
 
   const { session_id: sessionId, transcript_path: transcriptPath, cwd } = payload;
 
   if (!sessionId || !transcriptPath) {
-    process.stderr.write("[code-session-memory] Missing session_id or transcript_path in stdin\n");
+    logHookError(HOOK_SOURCE, "Missing session_id or transcript_path in stdin");
     process.exit(1);
   }
 
@@ -81,16 +87,17 @@ async function main() {
       directory: cwd ?? "",
     };
 
-    await indexNewMessages(provider, session, messages, "claude-code", { transcriptPath });
+    const result = await indexNewMessages(provider, session, messages, "claude-code", { transcriptPath });
+    logHookRun(HOOK_SOURCE, `session ${sessionId}: ${result.indexed} chunk(s) indexed, ${result.skipped} skipped`);
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
-    process.stderr.write(`[code-session-memory] Indexing error: ${msg}\n`);
+    logHookError(HOOK_SOURCE, `Indexing error: ${msg}`);
   } finally {
     await provider.close();
   }
 }
 
 main().catch((err) => {
-  process.stderr.write(`[code-session-memory] Fatal: ${err}\n`);
+  logHookError(HOOK_SOURCE, `Fatal: ${err}`);
   process.exit(1);
 });

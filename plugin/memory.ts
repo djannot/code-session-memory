@@ -17,8 +17,10 @@
 
 import type { Plugin } from "@opencode-ai/plugin";
 
-// The path below is replaced with an absolute path at install time.
+// Both paths below are replaced with absolute paths at install time.
+// NODE_BIN is absolute because a GUI-launched host may not have node on PATH.
 const INDEXER_CLI = "OPENCODE_MEMORY_INDEXER_PATH";
+const NODE_BIN = "OPENCODE_MEMORY_NODE_PATH";
 
 const MemoryPlugin: Plugin = async ({ $, serverUrl }) => {
   return {
@@ -29,7 +31,7 @@ const MemoryPlugin: Plugin = async ({ $, serverUrl }) => {
       if (!sessionId) return;
 
       try {
-        const result = await $`node ${INDEXER_CLI} ${sessionId} ${serverUrl.toString()}`
+        const result = await $`${NODE_BIN} ${INDEXER_CLI} ${sessionId} ${serverUrl.toString()}`
           .quiet()
           .nothrow();
         if (result.exitCode !== 0) {

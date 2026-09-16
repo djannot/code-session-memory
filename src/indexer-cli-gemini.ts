@@ -19,6 +19,9 @@ import os from "os";
 import path from "path";
 import { resolveBackendConfig } from "./config";
 import { createProvider } from "./providers";
+import { bootstrapHook, logHookError, logHookRun } from "./hook-runtime";
+
+const HOOK_SOURCE = "gemini-cli";
 
 interface GeminiHookPayload {
   sessionId?: string;
@@ -102,6 +105,9 @@ function findTranscriptBySessionId(sessionId: string, cwd?: string): string | un
 }
 
 async function main() {
+  // Repair the environment when a GUI-launched host gave us a bare one.
+  bootstrapHook(HOOK_SOURCE);
+
   const chunks: Buffer[] = [];
   for await (const chunk of process.stdin) {
     chunks.push(chunk as Buffer);
@@ -111,7 +117,7 @@ async function main() {
   try {
     payload = JSON.parse(Buffer.concat(chunks).toString("utf8")) as GeminiHookPayload;
   } catch (err) {
-    process.stderr.write(`[code-session-memory] Failed to parse stdin: ${err}\n`);
+    logHookError(HOOK_SOURCE, `Failed to parse stdin: ${err}`);
     process.exit(1);
     return;
   }
@@ -145,7 +151,7 @@ async function main() {
     (sessionId ? findTranscriptBySessionId(sessionId, projectDir) : undefined);
 
   if (!sessionId) {
-    process.stderr.write("[code-session-memory] Missing session id in hook payload (session_id/sessionId)\n");
+    logHookError(HOOK_SOURCE, "Missing session id in hook payload (session_id/sessionId)");
     process.exit(1);
     return;
   }
@@ -157,7 +163,7 @@ async function main() {
   }
 
   if (!transcriptPath) {
-    process.stderr.write("[code-session-memory] Missing transcript path in hook payload and could not auto-discover session file\n");
+    logHookError(HOOK_SOURCE, "Missing transcript path in hook payload and could not auto-discover session file");
     process.exit(1);
     return;
   }
@@ -177,16 +183,17 @@ async function main() {
       directory: projectDir,
     };
 
-    await indexNewMessages(provider, session, messages, "gemini-cli", { transcriptPath });
+    const result = await indexNewMessages(provider, session, messages, "gemini-cli", { transcriptPath });
+    logHookRun(HOOK_SOURCE, `session ${sessionId}: ${result.indexed} chunk(s) indexed, ${result.skipped} skipped`);
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
-    process.stderr.write(`[code-session-memory] Indexing error: ${msg}\n`);
+    logHookError(HOOK_SOURCE, `Indexing error: ${msg}`);
   } finally {
     await provider.close();
   }
 }
 
 main().catch((err) => {
-  process.stderr.write(`[code-session-memory] Fatal: ${err}\n`);
+  logHookError(HOOK_SOURCE, `Fatal: ${err}`);
   process.exit(1);
 });
