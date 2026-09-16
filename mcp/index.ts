@@ -22,6 +22,12 @@ import { resolveBackendConfig } from "../src/config";
 import { createProvider } from "../src/providers";
 import type { DatabaseProvider } from "../src/providers";
 import { createToolHandlers } from "./server";
+import { hydrateEnv } from "../src/runtime-env";
+
+// Hosts that launch this server from a desktop app (rather than a terminal)
+// provide no shell profile, so OPENAI_API_KEY and the backend settings come
+// from the snapshot written at install time.
+hydrateEnv();
 
 // ---------------------------------------------------------------------------
 // Configuration

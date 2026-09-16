@@ -19,6 +19,9 @@ import { getSessionFromOpenCodeDb, getMessagesFromOpenCodeDb } from "./opencode-
 import type { FullMessage } from "./types";
 import { resolveBackendConfig } from "./config";
 import { createProvider } from "./providers";
+import { bootstrapHook, logHookError, logHookRun } from "./hook-runtime";
+
+const HOOK_SOURCE = "opencode";
 
 const FETCH_RETRIES = 3;
 const FETCH_RETRY_DELAY_MS = 500;
@@ -67,6 +70,9 @@ async function fetchJsonWithRetry<T>(url: string): Promise<T | null> {
 }
 
 async function main() {
+  // Repair the environment when a GUI-launched host gave us a bare one.
+  bootstrapHook(HOOK_SOURCE);
+
   const sessionId = process.argv[2];
   const serverUrl = process.argv[3];
 
@@ -121,12 +127,13 @@ async function main() {
 
   const provider = await createProvider(resolveBackendConfig());
   try {
-    await indexNewMessages(
+    const result = await indexNewMessages(
       provider,
       { id: session.id, title: session.title, directory: session.directory },
       messages,
       "opencode",
     );
+    logHookRun(HOOK_SOURCE, `session ${session.id}: ${result.indexed} chunk(s) indexed, ${result.skipped} skipped`);
   } finally {
     await provider.close();
   }
@@ -143,8 +150,9 @@ main().catch((err) => {
   }
 
   const url = process.argv[3] ?? "(no url)";
-  process.stderr.write(
-    `[code-session-memory] indexer-cli error: ${err instanceof Error ? err.message : String(err)} (serverUrl: ${url})\n`,
+  logHookError(
+    HOOK_SOURCE,
+    `indexer-cli error: ${err instanceof Error ? err.message : String(err)} (serverUrl: ${url})`,
   );
   process.exit(1);
 });

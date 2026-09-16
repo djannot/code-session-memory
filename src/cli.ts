@@ -18,6 +18,20 @@ import { parse as parseToml, stringify as stringifyToml } from "smol-toml";
 import { resolveDbPath, openDatabase } from "./database";
 import { cmdSessions } from "./cli-sessions";
 import { cmdQuery } from "./cli-query";
+import {
+  resolveNodeExecutable,
+  isResolvedNodePath,
+  buildNodeCommand,
+  hydrateEnv,
+  captureEnvFromProcess,
+  saveEnvSnapshot,
+  loadEnvSnapshot,
+  getEnvFilePath,
+  maskEnvValue,
+  SNAPSHOT_ENV_KEYS,
+  REQUIRED_ENV_KEYS,
+} from "./runtime-env";
+import { getHookLogPath, readHookLog } from "./hook-log";
 
 // ---------------------------------------------------------------------------
 // Paths — OpenCode
@@ -254,7 +268,7 @@ function copyFile(src: string, dst: string): void {
  * Copies the OpenCode plugin template, replacing the OPENCODE_MEMORY_INDEXER_PATH
  * placeholder with the absolute path to indexer-cli.js.
  */
-function installOpenCodePlugin(src: string, dst: string): void {
+function installOpenCodePlugin(src: string, dst: string, nodePath: string): void {
   if (!fs.existsSync(src)) {
     throw new Error(`Plugin source not found: ${src}\nDid you run "npm run build" first?`);
   }
@@ -263,6 +277,10 @@ function installOpenCodePlugin(src: string, dst: string): void {
     '"OPENCODE_MEMORY_INDEXER_PATH"',
     JSON.stringify(getIndexerCliPath()),
   );
+  content = content.replace(
+    '"OPENCODE_MEMORY_NODE_PATH"',
+    JSON.stringify(nodePath),
+  );
   ensureDir(path.dirname(dst));
   fs.writeFileSync(dst, content, "utf8");
 }
@@ -270,7 +288,7 @@ function installOpenCodePlugin(src: string, dst: string): void {
 /**
  * Merges the code-session-memory MCP entry into the global opencode.json.
  */
-function installOpenCodeMcpConfig(mcpServerPath: string): { configPath: string; existed: boolean } {
+function installOpenCodeMcpConfig(mcpServerPath: string, nodePath: string): { configPath: string; existed: boolean } {
   const configPath = getGlobalOpenCodeConfigPath();
   const existed = fs.existsSync(configPath);
 
@@ -282,7 +300,7 @@ function installOpenCodeMcpConfig(mcpServerPath: string): { configPath: string; 
   if (!config.mcp || typeof config.mcp !== "object") config.mcp = {};
   (config.mcp as Record<string, unknown>)["code-session-memory"] = {
     type: "local",
-    command: ["node", mcpServerPath],
+    command: [nodePath, mcpServerPath],
   };
 
   ensureDir(path.dirname(configPath));
@@ -312,7 +330,7 @@ function uninstallOpenCodeMcpConfig(): "done" | "not_found" {
 /**
  * Installs/updates the Claude Code Stop hook in ~/.claude/settings.json.
  */
-function installClaudeHook(indexerCliClaudePath: string): { settingsPath: string; existed: boolean } {
+function installClaudeHook(indexerCliClaudePath: string, nodePath: string): { settingsPath: string; existed: boolean } {
   const settingsPath = getClaudeSettingsPath();
   const existed = fs.existsSync(settingsPath);
 
@@ -346,7 +364,7 @@ function installClaudeHook(indexerCliClaudePath: string): { settingsPath: string
     hooks: [
       {
         type: "command",
-        command: `node ${indexerCliClaudePath}`,
+        command: buildNodeCommand(nodePath, indexerCliClaudePath),
       },
     ],
   });
@@ -482,7 +500,7 @@ function checkMcpConfigured(): boolean {
  * Claude Code stores global MCP servers here under "mcpServers" with
  * { type: "stdio", command, args, env } shape.
  */
-function installClaudeMcpConfig(mcpServerPath: string): { configPath: string; existed: boolean } {
+function installClaudeMcpConfig(mcpServerPath: string, nodePath: string): { configPath: string; existed: boolean } {
   const configPath = getClaudeUserConfigPath();
   const existed = fs.existsSync(configPath);
 
@@ -494,7 +512,7 @@ function installClaudeMcpConfig(mcpServerPath: string): { configPath: string; ex
   if (!config.mcpServers || typeof config.mcpServers !== "object") config.mcpServers = {};
   (config.mcpServers as Record<string, unknown>)["code-session-memory"] = {
     type: "stdio",
-    command: "node",
+    command: nodePath,
     args: [mcpServerPath],
     env: {},
   };
@@ -572,7 +590,7 @@ function checkClaudeMdInstalled(): boolean {
  * Installs/updates the Cursor stop hook in ~/.cursor/hooks.json.
  * Merges with any existing hooks — never clobbers other entries.
  */
-function installCursorHook(indexerCliCursorPath: string): { hooksPath: string; existed: boolean } {
+function installCursorHook(indexerCliCursorPath: string, nodePath: string): { hooksPath: string; existed: boolean } {
   const hooksPath = getCursorHooksPath();
   const existed = fs.existsSync(hooksPath);
 
@@ -595,7 +613,7 @@ function installCursorHook(indexerCliCursorPath: string): { hooksPath: string; e
     config.hooks.stop = [];
   }
 
-  config.hooks.stop.push({ command: `node ${indexerCliCursorPath}` });
+  config.hooks.stop.push({ command: buildNodeCommand(nodePath, indexerCliCursorPath) });
 
   ensureDir(path.dirname(hooksPath));
   fs.writeFileSync(hooksPath, JSON.stringify(config, null, 2) + "\n", "utf8");
@@ -654,7 +672,7 @@ function checkCursorHookInstalled(): boolean {
 /**
  * Merges the code-session-memory MCP entry into ~/.cursor/mcp.json.
  */
-function installCursorMcpConfig(mcpServerPath: string): { configPath: string; existed: boolean } {
+function installCursorMcpConfig(mcpServerPath: string, nodePath: string): { configPath: string; existed: boolean } {
   const configPath = getCursorMcpConfigPath();
   const existed = fs.existsSync(configPath);
 
@@ -665,7 +683,7 @@ function installCursorMcpConfig(mcpServerPath: string): { configPath: string; ex
 
   if (!config.mcpServers || typeof config.mcpServers !== "object") config.mcpServers = {};
   (config.mcpServers as Record<string, unknown>)["code-session-memory"] = {
-    command: "node",
+    command: nodePath,
     args: [mcpServerPath],
     env: {},
   };
@@ -769,7 +787,7 @@ function uninstallCursorSkill(): "done" | "not_found" {
  * Installs the VS Code Stop hook at ~/.vscode/hooks/code-session-memory.json
  * using the Copilot hook format.
  */
-function installVscodeHook(indexerCliVscodePath: string): { hooksPath: string; existed: boolean } {
+function installVscodeHook(indexerCliVscodePath: string, nodePath: string): { hooksPath: string; existed: boolean } {
   const hooksPath = getVscodeHooksPath();
   const existed = fs.existsSync(hooksPath);
 
@@ -779,7 +797,7 @@ function installVscodeHook(indexerCliVscodePath: string): { hooksPath: string; e
       Stop: [
         {
           type: "command",
-          command: `node ${indexerCliVscodePath}`,
+          command: buildNodeCommand(nodePath, indexerCliVscodePath),
         },
       ],
     },
@@ -911,7 +929,7 @@ function checkVscodeHookLocationRegistered(): boolean {
 /**
  * Merges the code-session-memory MCP entry into VS Code's mcp.json.
  */
-function installVscodeMcpConfig(mcpServerPath: string): { configPath: string; existed: boolean } {
+function installVscodeMcpConfig(mcpServerPath: string, nodePath: string): { configPath: string; existed: boolean } {
   const configPath = getVscodeMcpConfigPath();
   const existed = fs.existsSync(configPath);
 
@@ -923,7 +941,7 @@ function installVscodeMcpConfig(mcpServerPath: string): { configPath: string; ex
   if (!config.servers || typeof config.servers !== "object") config.servers = {};
   (config.servers as Record<string, unknown>)["code-session-memory"] = {
     type: "stdio",
-    command: "node",
+    command: nodePath,
     args: [mcpServerPath],
   };
 
@@ -990,7 +1008,7 @@ function mergeCodexEnvVarsPassthrough(existing: unknown): string[] {
   return values;
 }
 
-function installCodexMcpConfig(mcpServerPath: string): { configPath: string; existed: boolean } {
+function installCodexMcpConfig(mcpServerPath: string, nodePath: string): { configPath: string; existed: boolean } {
   const configPath = getCodexConfigPath();
   const existed = fs.existsSync(configPath);
   const config = parseCodexConfigOrEmpty(configPath);
@@ -1008,7 +1026,7 @@ function installCodexMcpConfig(mcpServerPath: string): { configPath: string; exi
 
   mcpServers["code-session-memory"] = {
     ...serverConfig,
-    command: "node",
+    command: nodePath,
     args: [mcpServerPath],
     // Codex MCP servers run with a restricted environment by default.
     // Pass-through env vars are configured via env_vars (env is a map of fixed values).
@@ -1063,12 +1081,12 @@ function checkCodexOpenAiPassthroughConfigured(): boolean {
   }
 }
 
-function installCodexHook(indexerCliCodexPath: string): { configPath: string; existed: boolean } {
+function installCodexHook(indexerCliCodexPath: string, nodePath: string): { configPath: string; existed: boolean } {
   const configPath = getCodexConfigPath();
   const existed = fs.existsSync(configPath);
   const config = parseCodexConfigOrEmpty(configPath);
 
-  config.notify = ["node", indexerCliCodexPath];
+  config.notify = [nodePath, indexerCliCodexPath];
 
   ensureDir(path.dirname(configPath));
   fs.writeFileSync(configPath, stringifyToml(config) + "\n", "utf8");
@@ -1155,7 +1173,7 @@ function parseGeminiSettingsOrEmpty(settingsPath: string): Record<string, unknow
   }
 }
 
-function installGeminiMcpConfig(mcpServerPath: string): { settingsPath: string; existed: boolean } {
+function installGeminiMcpConfig(mcpServerPath: string, nodePath: string): { settingsPath: string; existed: boolean } {
   const settingsPath = getGeminiSettingsPath();
   const existed = fs.existsSync(settingsPath);
   const settings = parseGeminiSettingsOrEmpty(settingsPath);
@@ -1168,7 +1186,7 @@ function installGeminiMcpConfig(mcpServerPath: string): { settingsPath: string; 
 
   mcpServers["code-session-memory"] = {
     type: "stdio",
-    command: "node",
+    command: nodePath,
     args: [mcpServerPath],
   };
   settings.mcpServers = mcpServers;
@@ -1212,7 +1230,7 @@ function checkGeminiMcpConfigured(): boolean {
   }
 }
 
-function installGeminiHook(indexerCliGeminiPath: string): { settingsPath: string; existed: boolean } {
+function installGeminiHook(indexerCliGeminiPath: string, nodePath: string): { settingsPath: string; existed: boolean } {
   const settingsPath = getGeminiSettingsPath();
   const existed = fs.existsSync(settingsPath);
   const settings = parseGeminiSettingsOrEmpty(settingsPath);
@@ -1245,7 +1263,7 @@ function installGeminiHook(indexerCliGeminiPath: string): { settingsPath: string
       {
         type: "command",
         name: "code-session-memory-indexer",
-        command: `node ${indexerCliGeminiPath}`,
+        command: buildNodeCommand(nodePath, indexerCliGeminiPath),
       },
     ],
   });
@@ -1435,6 +1453,117 @@ function stepIf(condition: boolean, label: string, fn: () => string): void {
 }
 
 // ---------------------------------------------------------------------------
+// Runtime diagnostics — is the node binary baked into the configs still valid?
+// ---------------------------------------------------------------------------
+
+/** Extracts the executable from a hook command string (handles quoting). */
+function commandExecutable(command: string): string {
+  const quoted = /^\s*"([^"]+)"/.exec(command);
+  if (quoted) return quoted[1];
+  return command.trim().split(/\s+/)[0] ?? "";
+}
+
+function jsonHookCommands(filePath: string, pick: (config: Record<string, unknown>) => string[]): string[] {
+  try {
+    return pick(parseJsonc(fs.readFileSync(filePath, "utf8")) as Record<string, unknown>);
+  } catch {
+    return [];
+  }
+}
+
+function nestedHookCommands(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  const out: string[] = [];
+  for (const group of value) {
+    if (!group || typeof group !== "object") continue;
+    const hooks = (group as Record<string, unknown>).hooks;
+    if (!Array.isArray(hooks)) continue;
+    for (const hook of hooks) {
+      const command = (hook as Record<string, unknown> | null)?.command;
+      if (typeof command === "string") out.push(command);
+    }
+  }
+  return out;
+}
+
+function flatHookCommands(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((entry) => (entry as Record<string, unknown> | null)?.command)
+    .filter((command): command is string => typeof command === "string");
+}
+
+/**
+ * Collects every executable the installed configs will invoke, so status can
+ * tell the user when a recorded node path has gone stale (a version manager
+ * removed it) or was never resolved (bare "node", which fails under a
+ * GUI-launched host).
+ */
+function collectConfiguredExecutables(): Array<{ label: string; exec: string }> {
+  const out: Array<{ label: string; exec: string }> = [];
+  const add = (label: string, exec: string | undefined | null) => {
+    if (typeof exec === "string" && exec.trim().length > 0) out.push({ label, exec: exec.trim() });
+  };
+
+  // OpenCode plugin (node path is baked into the generated file)
+  try {
+    const plugin = fs.readFileSync(getOpenCodePluginDst(), "utf8");
+    const match = /const NODE_BIN = "([^"]+)"/.exec(plugin);
+    if (match) add("OpenCode plugin", match[1]);
+  } catch { /* not installed */ }
+
+  for (const command of jsonHookCommands(getClaudeSettingsPath(), (c) =>
+    nestedHookCommands((c.hooks as Record<string, unknown> | undefined)?.Stop).filter((x) => x.includes("indexer-cli-claude")),
+  )) add("Claude Code hook", commandExecutable(command));
+
+  for (const command of jsonHookCommands(getCursorHooksPath(), (c) =>
+    flatHookCommands((c.hooks as Record<string, unknown> | undefined)?.stop).filter((x) => x.includes("indexer-cli-cursor")),
+  )) add("Cursor hook", commandExecutable(command));
+
+  for (const command of jsonHookCommands(getVscodeHooksPath(), (c) =>
+    flatHookCommands((c.hooks as Record<string, unknown> | undefined)?.Stop).filter((x) => x.includes("indexer-cli-vscode")),
+  )) add("VS Code hook", commandExecutable(command));
+
+  for (const command of jsonHookCommands(getGeminiSettingsPath(), (c) =>
+    nestedHookCommands((c.hooks as Record<string, unknown> | undefined)?.AfterAgent).filter((x) => x.includes("indexer-cli-gemini")),
+  )) add("Gemini CLI hook", commandExecutable(command));
+
+  try {
+    const config = parseToml(fs.readFileSync(getCodexConfigPath(), "utf8")) as Record<string, unknown>;
+    const notify = config.notify;
+    if (Array.isArray(notify) && typeof notify[0] === "string") add("Codex notify hook", notify[0]);
+    const server = (config.mcp_servers as Record<string, unknown> | undefined)?.["code-session-memory"];
+    add("Codex MCP server", (server as Record<string, unknown> | undefined)?.command as string | undefined);
+  } catch { /* not installed */ }
+
+  add("Claude Code MCP server", jsonMcpCommand(getClaudeUserConfigPath(), "mcpServers"));
+  add("Cursor MCP server", jsonMcpCommand(getCursorMcpConfigPath(), "mcpServers"));
+  add("VS Code MCP server", jsonMcpCommand(getVscodeMcpConfigPath(), "servers"));
+  add("Gemini CLI MCP server", jsonMcpCommand(getGeminiSettingsPath(), "mcpServers"));
+
+  try {
+    const config = parseJsonc(fs.readFileSync(getGlobalOpenCodeConfigPath(), "utf8")) as Record<string, unknown>;
+    const server = (config.mcp as Record<string, unknown> | undefined)?.["code-session-memory"];
+    const command = (server as Record<string, unknown> | undefined)?.command;
+    if (Array.isArray(command) && typeof command[0] === "string") add("OpenCode MCP server", command[0]);
+  } catch { /* not installed */ }
+
+  return out;
+}
+
+function jsonMcpCommand(filePath: string, key: string): string | undefined {
+  try {
+    const config = parseJsonc(fs.readFileSync(filePath, "utf8")) as Record<string, unknown>;
+    const servers = config[key] as Record<string, unknown> | undefined;
+    const server = servers?.["code-session-memory"] as Record<string, unknown> | undefined;
+    const command = server?.command;
+    return typeof command === "string" ? command : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Commands
 // ---------------------------------------------------------------------------
 
@@ -1454,6 +1583,14 @@ function install(): void {
   const dbPath = isPostgres
     ? (backendConfig as import("./config").PostgresBackendConfig).connectionString.replace(/:[^:@]*@/, ":***@")
     : (backendConfig as import("./config").SqliteBackendConfig).dbPath;
+  // GUI-launched hosts (the Claude desktop app under launchd, a Windows/Linux
+  // desktop launcher) give hooks a bare environment: no shell profile, so no
+  // `node` on PATH and no exported API key. Bake an absolute node path into
+  // every command and snapshot the variables the hooks need.
+  const nodePath = resolveNodeExecutable();
+  const envState = hydrateEnv();
+  let capturedEnv: Record<string, string> = {};
+
   const mcpPath = getMcpServerPath();
   const indexerClaudePath = getIndexerCliClaudePath();
   const indexerCursorPath = getIndexerCliCursorPath();
@@ -1482,10 +1619,21 @@ function install(): void {
     });
   }
 
+  // Environment snapshot — hooks under a GUI-launched host see no shell
+  // profile, so the variables they need are recorded here instead.
+  step("Recording environment for GUI-launched apps", () => {
+    capturedEnv = saveEnvSnapshot(captureEnvFromProcess());
+    const count = SNAPSHOT_ENV_KEYS.filter((key) => capturedEnv[key]).length;
+    const from = envState.fromShell.length > 0
+      ? ` — ${envState.fromShell.join(", ")} read from your login shell`
+      : "";
+    return `${count} variable(s) → ${getEnvFilePath()}${from}`;
+  });
+
   // OpenCode
   stepIf(openCodeInstalled, "Installing OpenCode plugin", () => {
     const dst = getOpenCodePluginDst();
-    installOpenCodePlugin(getPluginSrc(), dst);
+    installOpenCodePlugin(getPluginSrc(), dst, nodePath);
     return dst;
   });
 
@@ -1496,18 +1644,18 @@ function install(): void {
   });
 
   stepIf(openCodeInstalled, "Configuring OpenCode MCP server", () => {
-    const { configPath, existed } = installOpenCodeMcpConfig(mcpPath);
+    const { configPath, existed } = installOpenCodeMcpConfig(mcpPath, nodePath);
     return `${existed ? "updated" : "created"} ${configPath}`;
   });
 
   // Claude Code
   stepIf(claudeInstalled, "Configuring Claude Code MCP server", () => {
-    const { configPath, existed } = installClaudeMcpConfig(mcpPath);
+    const { configPath, existed } = installClaudeMcpConfig(mcpPath, nodePath);
     return `${existed ? "updated" : "created"} ${configPath}`;
   });
 
   stepIf(claudeInstalled, "Installing Claude Code Stop hook", () => {
-    const { settingsPath, existed } = installClaudeHook(indexerClaudePath);
+    const { settingsPath, existed } = installClaudeHook(indexerClaudePath, nodePath);
     return `${existed ? "updated" : "created"} ${settingsPath}`;
   });
 
@@ -1518,12 +1666,12 @@ function install(): void {
 
   // Cursor
   stepIf(cursorInstalled, "Configuring Cursor MCP server", () => {
-    const { configPath, existed } = installCursorMcpConfig(mcpPath);
+    const { configPath, existed } = installCursorMcpConfig(mcpPath, nodePath);
     return `${existed ? "updated" : "created"} ${configPath}`;
   });
 
   stepIf(cursorInstalled, "Installing Cursor stop hook", () => {
-    const { hooksPath, existed } = installCursorHook(indexerCursorPath);
+    const { hooksPath, existed } = installCursorHook(indexerCursorPath, nodePath);
     return `${existed ? "updated" : "created"} ${hooksPath}`;
   });
 
@@ -1534,12 +1682,12 @@ function install(): void {
 
   // VS Code
   stepIf(vscodeInstalled, "Configuring VS Code MCP server", () => {
-    const { configPath, existed } = installVscodeMcpConfig(mcpPath);
+    const { configPath, existed } = installVscodeMcpConfig(mcpPath, nodePath);
     return `${existed ? "updated" : "created"} ${configPath}`;
   });
 
   stepIf(vscodeInstalled, "Installing VS Code Stop hook", () => {
-    const { hooksPath, existed } = installVscodeHook(indexerVscodePath);
+    const { hooksPath, existed } = installVscodeHook(indexerVscodePath, nodePath);
     return `${existed ? "updated" : "created"} ${hooksPath}`;
   });
 
@@ -1550,12 +1698,12 @@ function install(): void {
 
   // Codex
   stepIf(codexInstalled, "Configuring Codex MCP server", () => {
-    const { configPath, existed } = installCodexMcpConfig(mcpPath);
+    const { configPath, existed } = installCodexMcpConfig(mcpPath, nodePath);
     return `${existed ? "updated" : "created"} ${configPath}`;
   });
 
   stepIf(codexInstalled, "Installing Codex notify hook", () => {
-    const { configPath, existed } = installCodexHook(indexerCodexPath);
+    const { configPath, existed } = installCodexHook(indexerCodexPath, nodePath);
     return `${existed ? "updated" : "created"} ${configPath}`;
   });
 
@@ -1566,12 +1714,12 @@ function install(): void {
 
   // Gemini CLI
   stepIf(geminiInstalled, "Configuring Gemini CLI MCP server", () => {
-    const { settingsPath, existed } = installGeminiMcpConfig(mcpPath);
+    const { settingsPath, existed } = installGeminiMcpConfig(mcpPath, nodePath);
     return `${existed ? "updated" : "created"} ${settingsPath}`;
   });
 
   stepIf(geminiInstalled, "Installing Gemini CLI AfterAgent hook", () => {
-    const { settingsPath, existed } = installGeminiHook(indexerGeminiPath);
+    const { settingsPath, existed } = installGeminiHook(indexerGeminiPath, nodePath);
     return `${existed ? "updated" : "created"} ${settingsPath}`;
   });
 
@@ -1580,15 +1728,28 @@ function install(): void {
     return `${existed ? "updated" : "created"} ${dstPath}`;
   });
 
+  const capturedKeys = SNAPSHOT_ENV_KEYS.filter((key) => capturedEnv[key]);
+  const missingEnv = REQUIRED_ENV_KEYS.filter((key) => !capturedEnv[key]);
+
   console.log(`
 ${bold("Installation complete!")}
 
-${bold("Required environment variable:")}
-  OPENAI_API_KEY  — for embedding generation
-
+${bold("Node binary used by hooks:")} ${nodePath}${isResolvedNodePath(nodePath) ? "" : dim("  (could not be resolved to an absolute path — hooks will rely on PATH)")}
+${bold("Environment snapshot:")} ${getEnvFilePath()}
+  ${capturedKeys.length > 0 ? capturedKeys.map((key) => `${key}=${maskEnvValue(key, capturedEnv[key])}`).join("\n  ") : dim("(empty)")}
+${missingEnv.length > 0
+    ? `
+${bold("Warning:")} ${missingEnv.join(", ")} not found in this shell or in the snapshot.
+  Indexing will fail until you set it. Either re-run install from a shell that
+  exports it, or run: ${bold(`code-session-memory config set-env OPENAI_API_KEY=sk-...`)}
+`
+    : ""}
 ${bold(isPostgres ? "Database backend:" : "Default DB path:")} ${dbPath}
 
+${bold("Hook log:")} ${getHookLogPath()}
+
 Restart ${bold("OpenCode")}, ${bold("Claude Code")}, ${bold("Cursor")}, ${bold("VS Code")}, ${bold("Codex")}, and ${bold("Gemini CLI")} to activate.
+Desktop apps (Claude desktop, Cursor, VS Code) must be fully quit and relaunched.
 
 ${bold("VS Code note:")} Ensure ${bold("Chat: Use Hooks")} is enabled in VS Code settings.
 ${bold("Codex note:")} The notify hook and OPENAI_API_KEY passthrough are set in ${dim(getCodexConfigPath())}.
@@ -1676,6 +1837,8 @@ function status(): void {
 
   console.log(bold("\n  Shared"));
   console.log(`  ${ok(fs.existsSync(mcpPath))}  MCP server  ${dim(mcpPath)}`);
+
+  printRuntimeStatus();
 
   if (backendConfig.backend === "postgres") {
     console.log(`  ${ok(true)}  Database    ${dim(`postgres: ${dbPath}`)}`);
@@ -1780,6 +1943,61 @@ function status(): void {
   }
 }
 
+/**
+ * Reports the two things that silently break indexing under a GUI-launched
+ * host: an unusable node path in the configs, and a missing API key.
+ */
+function printRuntimeStatus(): void {
+  console.log(bold("\n  Runtime (how hooks are launched)"));
+
+  const executables = collectConfiguredExecutables();
+  if (executables.length === 0) {
+    console.log(`  ${dim("○")}  Node binary  ${dim("(nothing installed yet)")}`);
+  } else {
+    const broken = executables.filter((entry) => !isResolvedNodePath(entry.exec));
+    const distinct = [...new Set(executables.map((entry) => entry.exec))];
+    console.log(`  ${ok(broken.length === 0)}  Node binary  ${dim(distinct.join(", "))}`);
+    for (const entry of broken) {
+      const reason = path.isAbsolute(entry.exec)
+        ? "no longer exists"
+        : "not an absolute path — fails when the app is launched from the GUI";
+      console.log(`     ${red("!")} ${entry.label}: ${entry.exec} ${dim(`(${reason})`)}`);
+    }
+    if (broken.length > 0) {
+      console.log(`     ${dim("Fix: re-run")} ${bold("npx code-session-memory install")}`);
+    }
+  }
+
+  // Environment the hooks will see: process env is irrelevant here — what
+  // matters is the snapshot, because a GUI-launched host provides nothing.
+  const snapshot = loadEnvSnapshot();
+  const snapshotKeys = SNAPSHOT_ENV_KEYS.filter((key) => snapshot[key]);
+  const missing = REQUIRED_ENV_KEYS.filter((key) => !snapshot[key]);
+  console.log(`  ${ok(missing.length === 0)}  Env snapshot ${dim(getEnvFilePath())}`);
+  for (const key of snapshotKeys) {
+    console.log(`     ${dim(`${key}=${maskEnvValue(key, snapshot[key])}`)}`);
+  }
+  for (const key of missing) {
+    const inShell = process.env[key] ? " (set in this shell but not recorded)" : "";
+    console.log(`     ${red("!")} ${key} missing${inShell}`);
+  }
+  if (missing.length > 0) {
+    console.log(`     ${dim("Fix:")} ${bold(`npx code-session-memory config set-env ${missing[0]}=...`)}`);
+  }
+
+  // Hook log — the only trace of a hook that ran, since hosts discard stderr.
+  const logPath = getHookLogPath();
+  const recent = readHookLog(50);
+  const lastRun = [...recent].reverse().find((entry) => entry.level === "info");
+  const lastError = [...recent].reverse().find((entry) => entry.level === "error");
+  console.log(`  ${ok(recent.length > 0)}  Hook log     ${dim(logPath)}`);
+  if (lastRun) console.log(`     ${dim(`last run:   ${lastRun.timestamp} [${lastRun.source}] ${lastRun.message}`)}`);
+  if (lastError) console.log(`     ${red("!")} ${dim(`last error: ${lastError.timestamp} [${lastError.source}] ${lastError.message}`)}`);
+  if (recent.length === 0) {
+    console.log(`     ${dim("No hook has run yet — start a session in one of the tools above.")}`);
+  }
+}
+
 function uninstall(): void {
   console.log(bold("\ncode-session-memory uninstall\n"));
 
@@ -1847,6 +2065,11 @@ function uninstall(): void {
     }],
     ["Gemini CLI skill", () => {
       if (uninstallGeminiSkill() === "not_found") throw new Error("not found");
+    }],
+    ["Env snapshot", () => {
+      const p = getEnvFilePath();
+      if (fs.existsSync(p)) fs.unlinkSync(p);
+      else throw new Error("not found");
     }],
   ];
 
@@ -1990,6 +2213,53 @@ async function cmdConfig(args: string[]): Promise<void> {
       process.exit(1);
     }
 
+  } else if (sub === "set-env") {
+    // Records variables for hooks launched by GUI apps, which inherit no
+    // shell profile. Accepts KEY=VALUE pairs, or KEY to copy from this shell.
+    const assignments = args.slice(1);
+    if (assignments.length === 0) {
+      console.error("Usage: code-session-memory config set-env KEY=VALUE [KEY=VALUE...]");
+      process.exit(1);
+    }
+
+    const values: Record<string, string> = {};
+    for (const assignment of assignments) {
+      const eq = assignment.indexOf("=");
+      const key = eq === -1 ? assignment : assignment.slice(0, eq);
+      const value = eq === -1 ? process.env[key] : assignment.slice(eq + 1);
+      if (!SNAPSHOT_ENV_KEYS.includes(key as (typeof SNAPSHOT_ENV_KEYS)[number])) {
+        console.error(`Unknown variable: ${key}`);
+        console.error(`Supported: ${SNAPSHOT_ENV_KEYS.join(", ")}`);
+        process.exit(1);
+      }
+      if (!value) {
+        console.error(`No value for ${key} (not given, and not set in this shell)`);
+        process.exit(1);
+      }
+      values[key] = value;
+    }
+
+    const saved = saveEnvSnapshot(values);
+    console.log(`Saved to ${getEnvFilePath()}`);
+    for (const key of Object.keys(values)) {
+      console.log(`  ${key}=${maskEnvValue(key, saved[key])}`);
+    }
+    console.log("\nRestart your editors for hooks to pick this up.");
+
+  } else if (sub === "env") {
+    const snapshot = loadEnvSnapshot();
+    const keys = SNAPSHOT_ENV_KEYS.filter((key) => snapshot[key]);
+    console.log(`Env snapshot: ${getEnvFilePath()}`);
+    if (keys.length === 0) {
+      console.log("  (empty)");
+    } else {
+      for (const key of keys) console.log(`  ${key}=${maskEnvValue(key, snapshot[key])}`);
+    }
+    const missing = REQUIRED_ENV_KEYS.filter((key) => !snapshot[key]);
+    for (const key of missing) {
+      console.log(`  ${red("!")} ${key} missing — hooks in GUI-launched apps will fail`);
+    }
+
   } else if (sub === "show") {
     try {
       const config = resolveBackendConfig();
@@ -2008,12 +2278,19 @@ async function cmdConfig(args: string[]): Promise<void> {
 
   } else {
     console.log(`
-${bold("config")} — Manage the database backend
+${bold("config")} — Manage the database backend and the hook environment
 
 ${bold("Usage:")}
   code-session-memory config set-backend postgres --url <connection_string> [--ssl]
   code-session-memory config set-backend sqlite
   code-session-memory config show
+
+${bold("Environment for GUI-launched apps")} — hooks started by a desktop app get no
+shell profile, so the variables they need are recorded in a snapshot file:
+
+  code-session-memory config set-env OPENAI_API_KEY=sk-...
+  code-session-memory config set-env OPENAI_API_KEY        ${dim("(copy from this shell)")}
+  code-session-memory config env                           ${dim("(show the snapshot)")}
 `);
   }
 }
@@ -2131,11 +2408,13 @@ ${bold("Usage:")}
   npx code-session-memory web [--port <n>]                Start the web UI (default: port 3333)
   npx code-session-memory config set-backend <backend>    Set database backend (sqlite or postgres)
   npx code-session-memory config show                     Show current backend configuration
+  npx code-session-memory config set-env KEY=VALUE         Record a variable for hooks in GUI-launched apps
+  npx code-session-memory config env                      Show the recorded hook environment
   npx code-session-memory migrate                         Migrate SQLite data to PostgreSQL
   npx code-session-memory backfill-analytics              Fill per-model analytics for already-indexed sessions
   npx code-session-memory help                            Show this help
 
-${bold("Environment variables:")}
+${bold("Environment variables:")} ${dim("(GUI-launched apps get these from the env snapshot instead)")}
   OPENAI_API_KEY            Required for embedding generation
   OPENCODE_MEMORY_DB_PATH   Override the default SQLite DB path
   CSM_BACKEND               Override backend (sqlite or postgres)
@@ -2215,6 +2494,11 @@ ${report.skipped > 0 ? dim("Skipped sessions have no transcript on disk anymore 
 // ---------------------------------------------------------------------------
 // Entry point
 // ---------------------------------------------------------------------------
+
+// Fill environment gaps from the snapshot so commands work identically when
+// launched from a shell that does not export OPENAI_API_KEY. Never probes the
+// login shell here — `install` does that explicitly and reports what it found.
+hydrateEnv({ probeShell: false });
 
 const cmd = process.argv[2] ?? "help";
 
