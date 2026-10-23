@@ -279,11 +279,50 @@ function looksLikeNode(execPath: string): boolean {
   return /^node(\.exe)?$/i.test(path.basename(execPath));
 }
 
+/** Homebrew keg layout: `<prefix>/Cellar/<formula>/<version>/bin/node`. */
+const HOMEBREW_CELLAR_NODE = /^(.*)\/Cellar\/(node(?:@[^/]+)?)\/[^/]+\/bin\/node$/;
+
+/**
+ * Upgrade-proof alias for a version-pinned node path, or the path unchanged.
+ *
+ * `process.execPath` is the resolved binary, so under Homebrew it is the
+ * versioned keg (`/opt/homebrew/Cellar/node/26.7.0/bin/node`), which
+ * `brew upgrade` deletes. The `<prefix>/bin` and `<prefix>/opt/<formula>`
+ * symlinks follow upgrades. An alias is only used when it currently points
+ * at the same binary, so the recorded node never silently changes version.
+ */
+export function stableNodePath(execPath: string): string {
+  const match = HOMEBREW_CELLAR_NODE.exec(execPath);
+  if (!match) return execPath;
+  const [, prefix, formula] = match;
+
+  let target: string;
+  try {
+    target = fs.realpathSync(execPath);
+  } catch {
+    return execPath;
+  }
+
+  const candidates = [
+    path.join(prefix, "bin", "node"),
+    path.join(prefix, "opt", formula, "bin", "node"),
+  ];
+  for (const candidate of candidates) {
+    try {
+      if (fs.realpathSync(candidate) === target) return candidate;
+    } catch {
+      /* missing or dangling symlink: try the next one */
+    }
+  }
+  return execPath;
+}
+
 /**
  * Absolute path of a node binary to bake into hook commands and MCP configs.
  *
  * Prefers the interpreter running the installer (guaranteed to exist and to
- * match the version the user installed with). If the installer is running
+ * match the version the user installed with), through a stable symlink when
+ * it lives in a versioned Homebrew keg. If the installer is running
  * under something else (bun, tsx via a different runtime, an Electron host),
  * asks the login shell for `node`, and only then falls back to the bare
  * command — which is what fails under a GUI-launched host, so callers should
@@ -291,7 +330,7 @@ function looksLikeNode(execPath: string): boolean {
  */
 export function resolveNodeExecutable(): string {
   if (looksLikeNode(process.execPath) && fs.existsSync(process.execPath)) {
-    return process.execPath;
+    return stableNodePath(process.execPath);
   }
 
   const lookup = process.platform === "win32" ? "where node" : "command -v node";

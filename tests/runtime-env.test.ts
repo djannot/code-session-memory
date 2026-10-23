@@ -24,6 +24,7 @@ import {
   hydrateEnv,
   probeLoginShellEnv,
   resolveNodeExecutable,
+  stableNodePath,
   isResolvedNodePath,
   buildNodeCommand,
   quoteForShell,
@@ -237,6 +238,51 @@ describe("node executable", () => {
     const resolved = resolveNodeExecutable();
     expect(path.isAbsolute(resolved)).toBe(true);
     expect(isResolvedNodePath(resolved)).toBe(true);
+  });
+
+  describe("stableNodePath", () => {
+    // Fake Homebrew prefix: <tempHome>/brew/Cellar/<formula>/<version>/bin/node
+    function makeKeg(formula: string, version: string): string {
+      const keg = path.join(tempHome, "brew", "Cellar", formula, version, "bin", "node");
+      fs.mkdirSync(path.dirname(keg), { recursive: true });
+      fs.writeFileSync(keg, "");
+      return keg;
+    }
+    function link(alias: string, target: string): string {
+      const full = path.join(tempHome, "brew", alias);
+      fs.mkdirSync(path.dirname(full), { recursive: true });
+      fs.symlinkSync(target, full);
+      return full;
+    }
+
+    it("swaps a versioned keg for <prefix>/bin/node when it points at the same binary", () => {
+      const keg = makeKeg("node", "26.7.0");
+      const alias = link("bin/node", keg);
+      expect(stableNodePath(keg)).toBe(alias);
+    });
+
+    it("falls back to <prefix>/opt/<formula> when bin/node is another formula", () => {
+      const keg = makeKeg("node@22", "22.11.0");
+      link("bin/node", makeKeg("node", "26.12.0"));
+      const alias = link("opt/node@22/bin/node", keg);
+      expect(stableNodePath(keg)).toBe(alias);
+    });
+
+    it("keeps the keg path when no alias resolves to it", () => {
+      const keg = makeKeg("node", "26.7.0");
+      link("bin/node", makeKeg("node", "26.12.0"));
+      expect(stableNodePath(keg)).toBe(keg);
+    });
+
+    it("leaves non-Homebrew paths alone", () => {
+      expect(stableNodePath("/usr/local/bin/node")).toBe("/usr/local/bin/node");
+      expect(stableNodePath("/Users/a/.nvm/versions/node/v20.0.0/bin/node"))
+        .toBe("/Users/a/.nvm/versions/node/v20.0.0/bin/node");
+    });
+  });
+
+  it("records the stable alias of the running interpreter", () => {
+    expect(resolveNodeExecutable()).toBe(stableNodePath(process.execPath));
   });
 
   it("treats a bare command or a vanished path as unresolved", () => {
