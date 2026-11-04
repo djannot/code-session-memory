@@ -1,11 +1,11 @@
 ---
 name: code-session-memory
-description: Search past OpenCode, Claude Code, Cursor, VS Code, Codex, and Gemini CLI sessions stored in the shared vector memory database
+description: Search past OpenCode, Claude Code, Cursor, VS Code, Codex, Gemini CLI, and Antigravity sessions stored in the shared vector memory database
 ---
 
 # code-session-memory
 
-You have access to an MCP server called `code-session-memory` that automatically indexes all your past coding sessions — from **OpenCode**, **Claude Code**, **Cursor**, **VS Code**, **Codex**, and **Gemini CLI** — into a single shared local vector database. Every time a session completes a turn, the new messages are embedded and stored, giving you a searchable memory of your entire AI coding history across all tools.
+You have access to an MCP server called `code-session-memory` that automatically indexes all your past coding sessions — from **OpenCode**, **Claude Code**, **Cursor**, **VS Code**, **Codex**, **Gemini CLI**, and **Antigravity** — into a single shared local vector database. Every time a session completes a turn, the new messages are embedded and stored, giving you a searchable memory of your entire AI coding history across all tools.
 
 ## Available tools
 
@@ -16,7 +16,7 @@ Semantically search across all indexed sessions to find past conversations, deci
 **Parameters:**
 - `queryText` *(required)*: A natural language description of what you are looking for.
 - `project` *(optional)*: Filter results to a specific project directory path (e.g. `"/Users/me/myproject"`).
-- `source` *(optional)*: Filter by tool — `"opencode"`, `"claude-code"`, `"cursor"`, `"vscode"`, `"codex"`, or `"gemini-cli"`. Omit to search across all.
+- `source` *(optional)*: Filter by tool — `"opencode"`, `"claude-code"`, `"cursor"`, `"vscode"`, `"codex"`, `"gemini-cli"`, or `"antigravity"`. Omit to search across all.
 - `limit` *(optional, default 5)*: Number of results to return (1–20).
 - `fromDate` *(optional)*: Return only chunks indexed on or after this date. ISO 8601, e.g. `"2026-02-01"` or `"2026-02-20T15:00:00Z"`.
 - `toDate` *(optional)*: Return only chunks indexed on or before this date. ISO 8601, e.g. `"2026-02-20"`. Date-only values are treated as end-of-day UTC.
@@ -78,7 +78,7 @@ query_sessions("redis cache endpoints")
 
 Use `get_session_chunks` to read the full context around any relevant match from `query_sessions`.
 
-**Remember:** Session memory is searchable across ALL your AI coding sessions (OpenCode, Claude Code, Cursor, VS Code, Codex, Gemini CLI). A 5-second search can save you 5 minutes of code reading or prevent repeating past mistakes.
+**Remember:** Session memory is searchable across ALL your AI coding sessions (OpenCode, Claude Code, Cursor, VS Code, Codex, Gemini CLI, Antigravity). A 5-second search can save you 5 minutes of code reading or prevent repeating past mistakes.
 
 ## Example usage
 
@@ -101,6 +101,9 @@ query_sessions("openapi mock server", source="codex")
 # Search only Gemini CLI sessions
 query_sessions("hook payload format", source="gemini-cli")
 
+# Search only Antigravity sessions
+query_sessions("customization root layout", source="antigravity")
+
 # Search sessions from a specific date range
 query_sessions("authentication middleware", fromDate="2026-02-01", toDate="2026-02-20")
 
@@ -110,7 +113,7 @@ get_session_chunks("session://ses_abc123#msg_def456")
 
 ## Notes
 
-- Sessions from OpenCode, Claude Code, Cursor, VS Code, Codex, and Gemini CLI are indexed into the **same** database.
+- Sessions from OpenCode, Claude Code, Cursor, VS Code, Codex, Gemini CLI, and Antigravity are indexed into the **same** database.
 - Indexing is automatic — no manual action needed.
 - The database lives at `~/.local/share/code-session-memory/sessions.db`.
 - Embeddings use OpenAI `text-embedding-3-large` (3072 dimensions).

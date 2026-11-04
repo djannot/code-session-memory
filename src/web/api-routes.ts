@@ -18,6 +18,10 @@ import { cursorTranscriptToMessages } from "../cursor-transcript-to-messages";
 import { parseVscodeTranscript } from "../vscode-transcript-to-messages";
 import { codexSessionToMessages, deriveCodexSessionTitle } from "../codex-session-to-messages";
 import { geminiSessionToMessages, deriveGeminiSessionTitle } from "../gemini-session-to-messages";
+import {
+  antigravityTranscriptToMessages,
+  deriveAntigravitySessionTitle,
+} from "../antigravity-transcript-to-messages";
 import { resolveTranscriptPath } from "../transcript-discovery";
 
 // ---------------------------------------------------------------------------
@@ -39,7 +43,7 @@ function parseDateMs(value: string, boundary: "start" | "end"): number | null {
 // ---------------------------------------------------------------------------
 
 const VALID_SOURCES = new Set<string>([
-  "opencode", "claude-code", "cursor", "vscode", "codex", "gemini-cli",
+  "opencode", "claude-code", "cursor", "vscode", "codex", "gemini-cli", "antigravity",
 ]);
 
 const VALID_SECTIONS = new Set<string>(["user", "assistant", "tool"]);
@@ -331,6 +335,13 @@ export function createApiRouter(provider: DatabaseProvider): Router {
             case "gemini-cli":
               messages = geminiSessionToMessages(transcriptPath);
               if (!title) title = deriveGeminiSessionTitle(messages, id);
+              break;
+            case "antigravity":
+              // The model name only reaches us through the hook payload and is
+              // not in the transcript, so a re-index drops it from the rebuilt
+              // message rows.
+              messages = antigravityTranscriptToMessages(transcriptPath, { conversationId: id });
+              if (!title) title = deriveAntigravitySessionTitle(messages, id);
               break;
             default:
               failed.push({ id, reason: `Source "${meta.source}" cannot be reindexed` });

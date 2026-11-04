@@ -24,7 +24,7 @@ export interface DocumentChunk {
 /**
  * Which tool produced a session.
  */
-export type SessionSource = "opencode" | "claude-code" | "cursor" | "vscode" | "codex" | "gemini-cli";
+export type SessionSource = "opencode" | "claude-code" | "cursor" | "vscode" | "codex" | "gemini-cli" | "antigravity";
 
 /**
  * A row in the sessions_meta table — tracks per-session indexing progress.

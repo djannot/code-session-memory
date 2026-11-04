@@ -38,6 +38,7 @@ function fmtSource(source: string): string {
   if (source === "vscode")      return yellow("vscode");
   if (source === "codex")       return yellow("codex");
   if (source === "gemini-cli")  return cyan("gemini-cli");
+  if (source === "antigravity") return green("antigravity");
   return yellow("claude-code");
 }
 
@@ -217,6 +218,7 @@ function sourceLabelText(source: string): string {
   if (source === "vscode")      return "VS Code";
   if (source === "codex")       return "Codex";
   if (source === "gemini-cli")  return "Gemini CLI";
+  if (source === "antigravity") return "Antigravity";
   if (source === "claude-code") return "Claude Code";
   return source;
 }

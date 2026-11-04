@@ -31,7 +31,10 @@ function renderToolPart(part: MessagePart): string {
     lines.push("");
   }
 
-  if (part.state === "result" && part.result !== undefined) {
+  // "error" is a completed call too — a source that reports tool failures
+  // explicitly (Antigravity) marks them so analytics can count them, and the
+  // output still belongs in the indexed text.
+  if ((part.state === "result" || part.state === "error") && part.result !== undefined) {
     const result = part.result;
     const resultStr = truncateOutput(
       typeof result === "string"

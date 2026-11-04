@@ -4,7 +4,7 @@ import ConfirmDialog from "../components/ConfirmDialog";
 import { useSessions } from "../hooks/useSessions";
 import type { ReindexCheckResult } from "../api/client";
 
-const SOURCES = ["", "opencode", "claude-code", "cursor", "vscode", "codex", "gemini-cli"];
+const SOURCES = ["", "opencode", "claude-code", "cursor", "vscode", "codex", "gemini-cli", "antigravity"];
 
 export default function SessionsPage() {
   const { sessions, loading, error, filters, setFilters, deleteSession, bulkDelete, purgeSessions, checkReindex, bulkReindex } = useSessions();

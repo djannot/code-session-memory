@@ -62,16 +62,17 @@ export function parseQueryArgs(args: string[]): QueryOptions {
       hybrid = true;
     } else if (arg === "--source") {
       const val = args[++i];
-      if (!val) throw new Error("--source requires a value (opencode, claude-code, cursor, vscode, codex, gemini-cli)");
+      if (!val) throw new Error("--source requires a value (opencode, claude-code, cursor, vscode, codex, gemini-cli, antigravity)");
       if (
         val !== "opencode" &&
         val !== "claude-code" &&
         val !== "cursor" &&
         val !== "vscode" &&
         val !== "codex" &&
-        val !== "gemini-cli"
+        val !== "gemini-cli" &&
+        val !== "antigravity"
       ) {
-        throw new Error(`Invalid --source "${val}". Must be one of: opencode, claude-code, cursor, vscode, codex, gemini-cli`);
+        throw new Error(`Invalid --source "${val}". Must be one of: opencode, claude-code, cursor, vscode, codex, gemini-cli, antigravity`);
       }
       source = val;
     } else if (arg === "--limit") {
