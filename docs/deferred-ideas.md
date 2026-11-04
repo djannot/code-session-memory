@@ -28,3 +28,31 @@ Deferred from that work:
 - **Automatic re-install on package upgrade.** Hook commands embed absolute paths
   into the installed package directory, so an `npx`-cached upgrade can leave
   stale paths. A postinstall check could detect and rewrite them.
+
+## Antigravity 2.x support (2026-11-04)
+
+Implemented: `antigravity` source, JSONL transcript parser, `Stop` lifecycle
+hook, MCP entry in `~/.gemini/config/mcp_config.json`, skill, status and
+uninstall. Deferred from that work:
+
+- **Better session titles.** `~/.gemini/<surface>/antigravity/conversation_summaries.db`
+  holds an Antigravity-generated `title` per conversation (plus an FTS index over
+  `user_body` / `agent_body`). We derive the title from the first user prompt
+  instead, to avoid reading another product's live SQLite file (WAL) from a hook.
+  Reading it opportunistically, read-only, would give nicer titles.
+- **A real model name.** The hook payload's `modelName` is often `"auto"` rather
+  than the model that actually served the turn, and the transcript does not carry
+  the resolved name — only a `<USER_SETTINGS_CHANGE>` note in the first user step
+  when the user picks one by hand. Per-model analytics for Antigravity are
+  therefore only as good as that field, and a web-UI re-index drops it entirely
+  (the transcript has no model at all).
+- **Backfilling existing conversations.** `BACKFILL_SOURCES` still covers only
+  claude-code, opencode and codex. Antigravity transcripts are discoverable by
+  conversation id, so `backfill-analytics` could include them.
+- **Indexing conversations that predate the install.** Only turns that end after
+  the hook is installed are indexed. A one-off import walking
+  `~/.gemini/<surface>/brain/*/` would pick up the existing history.
+- **The two older surfaces.** The installer writes one global `hooks.json` that
+  all three surfaces read, but only the 2.x app was exercised end to end; the IDE
+  (`antigravity-ide`) and CLI (`antigravity-cli`) are covered by path handling
+  and unit tests only.

@@ -83,6 +83,40 @@ export function discoverGeminiTranscript(sessionId: string): string | null {
   return null;
 }
 
+/**
+ * Antigravity keeps one transcript per conversation, under the surface
+ * directory that produced it: `antigravity` (the 2.x app), `antigravity-ide`
+ * (the editor) or `antigravity-cli`. All three live inside the Gemini config
+ * directory, which Antigravity shares with Gemini CLI.
+ */
+export function discoverAntigravityTranscript(conversationId: string): string | null {
+  if (!conversationId.trim()) return null;
+
+  const geminiDir = process.env.GEMINI_CONFIG_DIR ?? path.join(os.homedir(), ".gemini");
+  const surfaces = ["antigravity", "antigravity-ide", "antigravity-cli"];
+
+  const matches: { path: string; mtime: number }[] = [];
+  for (const surface of surfaces) {
+    const candidate = path.join(
+      geminiDir,
+      surface,
+      "brain",
+      conversationId,
+      ".system_generated",
+      "logs",
+      "transcript.jsonl",
+    );
+    if (!fs.existsSync(candidate)) continue;
+    let mtime = 0;
+    try { mtime = fs.statSync(candidate).mtimeMs; } catch { /* ignore */ }
+    matches.push({ path: candidate, mtime });
+  }
+
+  if (matches.length === 0) return null;
+  matches.sort((a, b) => b.mtime - a.mtime);
+  return matches[0].path;
+}
+
 export function resolveTranscriptPath(meta: SessionMeta): string | null {
   if (meta.transcript_path && fs.existsSync(meta.transcript_path)) {
     return meta.transcript_path;
@@ -91,6 +125,7 @@ export function resolveTranscriptPath(meta: SessionMeta): string | null {
     case "claude-code": return discoverClaudeTranscript(meta.session_id);
     case "codex": return discoverCodexTranscript(meta.session_id);
     case "gemini-cli": return discoverGeminiTranscript(meta.session_id);
+    case "antigravity": return discoverAntigravityTranscript(meta.session_id);
     default: return null;
   }
 }

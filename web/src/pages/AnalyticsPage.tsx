@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useAnalytics } from "../hooks/useAnalytics";
 import type { ModelStat } from "../api/client";
 
-const SOURCES = ["opencode", "claude-code", "cursor", "vscode", "codex", "gemini-cli"];
+const SOURCES = ["opencode", "claude-code", "cursor", "vscode", "codex", "gemini-cli", "antigravity"];
 
 const roleColors: Record<string, string> = {
   user: "bg-blue-400",

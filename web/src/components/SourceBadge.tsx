@@ -5,6 +5,7 @@ const sourceColors: Record<string, string> = {
   vscode: "bg-blue-200/40 text-blue-800 border-blue-300/40",
   codex: "bg-violet-200/40 text-violet-800 border-violet-300/40",
   "gemini-cli": "bg-rose-200/40 text-rose-800 border-rose-300/40",
+  antigravity: "bg-indigo-200/40 text-indigo-800 border-indigo-300/40",
 };
 
 export default function SourceBadge({ source }: { source: string }) {

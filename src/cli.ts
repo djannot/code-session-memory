@@ -131,6 +131,10 @@ function getIndexerCliGeminiPath(): string {
   return path.join(getPackageRoot(), "dist", "src", "indexer-cli-gemini.js");
 }
 
+function getIndexerCliAntigravityPath(): string {
+  return path.join(getPackageRoot(), "dist", "src", "indexer-cli-antigravity.js");
+}
+
 // ---------------------------------------------------------------------------
 // Paths — Cursor
 // ---------------------------------------------------------------------------
@@ -217,6 +221,33 @@ function getGeminiSettingsPath(): string {
 
 function getGeminiSkillDst(): string {
   return path.join(getGeminiConfigDir(), "skills", "code-session-memory", "SKILL.md");
+}
+
+// ---------------------------------------------------------------------------
+// Paths — Antigravity 2.x
+//
+// Antigravity shares ~/.gemini with Gemini CLI but reads none of its files:
+// its global customization root is ~/.gemini/config/, holding mcp_config.json,
+// hooks.json and skills/<name>/SKILL.md. The same root serves all three
+// surfaces (the 2.x app, the IDE and the CLI).
+// ---------------------------------------------------------------------------
+
+function getAntigravityConfigDir(): string {
+  const envDir = process.env.ANTIGRAVITY_CONFIG_DIR;
+  if (envDir) return envDir;
+  return path.join(getGeminiConfigDir(), "config");
+}
+
+function getAntigravityMcpConfigPath(): string {
+  return path.join(getAntigravityConfigDir(), "mcp_config.json");
+}
+
+function getAntigravityHooksPath(): string {
+  return path.join(getAntigravityConfigDir(), "hooks.json");
+}
+
+function getAntigravitySkillDst(): string {
+  return path.join(getAntigravityConfigDir(), "skills", "code-session-memory", "SKILL.md");
 }
 
 // ---------------------------------------------------------------------------
@@ -1395,6 +1426,185 @@ function uninstallGeminiSkill(): "done" | "not_found" {
 }
 
 // ---------------------------------------------------------------------------
+// Antigravity 2.x — ~/.gemini/config/
+// ---------------------------------------------------------------------------
+
+/** Hook name used as the top-level key in Antigravity's hooks.json. */
+const ANTIGRAVITY_HOOK_NAME = "code-session-memory";
+
+/**
+ * Embedding a turn can take longer than Antigravity's 30s default, and hooks
+ * block the agent loop, so the Stop handler gets room to finish.
+ */
+const ANTIGRAVITY_HOOK_TIMEOUT_SECONDS = 120;
+
+function parseAntigravityJsonOrEmpty(filePath: string): Record<string, unknown> {
+  if (!fs.existsSync(filePath)) return {};
+  const raw = fs.readFileSync(filePath, "utf8").trim();
+  if (!raw) return {};
+  try {
+    return JSON.parse(raw) as Record<string, unknown>;
+  } catch {
+    throw new Error(`Could not parse existing ${filePath} — please check it is valid JSON.`);
+  }
+}
+
+function installAntigravityMcpConfig(mcpServerPath: string, nodePath: string): { configPath: string; existed: boolean } {
+  const configPath = getAntigravityMcpConfigPath();
+  const existed = fs.existsSync(configPath);
+  const config = parseAntigravityJsonOrEmpty(configPath);
+
+  const mcpServersRaw = config.mcpServers;
+  const mcpServers =
+    mcpServersRaw && typeof mcpServersRaw === "object"
+      ? mcpServersRaw as Record<string, unknown>
+      : {};
+
+  mcpServers["code-session-memory"] = {
+    command: nodePath,
+    args: [mcpServerPath],
+    env: {},
+  };
+  config.mcpServers = mcpServers;
+
+  ensureDir(path.dirname(configPath));
+  fs.writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n", "utf8");
+  return { configPath, existed };
+}
+
+function uninstallAntigravityMcpConfig(): "done" | "not_found" {
+  const configPath = getAntigravityMcpConfigPath();
+  if (!fs.existsSync(configPath)) return "not_found";
+  try {
+    const config = JSON.parse(fs.readFileSync(configPath, "utf8")) as Record<string, unknown>;
+    if (
+      config.mcpServers &&
+      typeof config.mcpServers === "object" &&
+      "code-session-memory" in (config.mcpServers as object)
+    ) {
+      delete (config.mcpServers as Record<string, unknown>)["code-session-memory"];
+      fs.writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n", "utf8");
+      return "done";
+    }
+    return "not_found";
+  } catch {
+    return "not_found";
+  }
+}
+
+function checkAntigravityMcpConfigured(): boolean {
+  try {
+    const config = JSON.parse(fs.readFileSync(getAntigravityMcpConfigPath(), "utf8")) as Record<string, unknown>;
+    return !!(
+      config.mcpServers &&
+      typeof config.mcpServers === "object" &&
+      "code-session-memory" in (config.mcpServers as object)
+    );
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Antigravity's hooks.json maps a hook *name* to its event configuration, and
+ * `Stop` takes a flat list of handler objects (no `matcher` wrapper — that is
+ * only for the tool events). Other named hooks are left untouched.
+ */
+function installAntigravityHook(indexerCliAntigravityPath: string, nodePath: string): { hooksPath: string; existed: boolean } {
+  const hooksPath = getAntigravityHooksPath();
+  const existed = fs.existsSync(hooksPath);
+  const hooks = parseAntigravityJsonOrEmpty(hooksPath);
+
+  hooks[ANTIGRAVITY_HOOK_NAME] = {
+    Stop: [
+      {
+        type: "command",
+        command: buildNodeCommand(nodePath, indexerCliAntigravityPath),
+        timeout: ANTIGRAVITY_HOOK_TIMEOUT_SECONDS,
+      },
+    ],
+  };
+
+  ensureDir(path.dirname(hooksPath));
+  fs.writeFileSync(hooksPath, JSON.stringify(hooks, null, 2) + "\n", "utf8");
+  return { hooksPath, existed };
+}
+
+function uninstallAntigravityHook(): "done" | "not_found" {
+  const hooksPath = getAntigravityHooksPath();
+  if (!fs.existsSync(hooksPath)) return "not_found";
+  try {
+    const hooks = JSON.parse(fs.readFileSync(hooksPath, "utf8")) as Record<string, unknown>;
+    if (!(ANTIGRAVITY_HOOK_NAME in hooks)) return "not_found";
+    delete hooks[ANTIGRAVITY_HOOK_NAME];
+
+    // Leave no empty file behind when ours was the only hook.
+    if (Object.keys(hooks).length === 0) fs.unlinkSync(hooksPath);
+    else fs.writeFileSync(hooksPath, JSON.stringify(hooks, null, 2) + "\n", "utf8");
+    return "done";
+  } catch {
+    return "not_found";
+  }
+}
+
+function antigravityStopHookCommands(hooks: Record<string, unknown>): string[] {
+  const entry = hooks[ANTIGRAVITY_HOOK_NAME];
+  if (!entry || typeof entry !== "object") return [];
+  const stop = (entry as Record<string, unknown>).Stop;
+  if (!Array.isArray(stop)) return [];
+  return stop
+    .map((handler) => (handler as Record<string, unknown> | null)?.command)
+    .filter((command): command is string => typeof command === "string");
+}
+
+function checkAntigravityHookInstalled(): boolean {
+  try {
+    const hooks = JSON.parse(fs.readFileSync(getAntigravityHooksPath(), "utf8")) as Record<string, unknown>;
+    return antigravityStopHookCommands(hooks).some((command) =>
+      command.includes("indexer-cli-antigravity"),
+    );
+  } catch {
+    return false;
+  }
+}
+
+function installAntigravitySkill(skillSrc: string): { dstPath: string; existed: boolean } {
+  const dstPath = getAntigravitySkillDst();
+  const existed = fs.existsSync(dstPath);
+
+  if (!fs.existsSync(skillSrc)) {
+    throw new Error(`Skill source not found: ${skillSrc}\nDid you run "npm run build" first?`);
+  }
+
+  const skillBody = fs.readFileSync(skillSrc, "utf8");
+  const bodyWithoutFrontmatter = skillBody
+    .replace(/^---[\s\S]*?---\s*\n?/, "")
+    .trimStart();
+  const antigravityFrontmatter = [
+    "---",
+    "name: code-session-memory",
+    "description: Search past AI coding sessions semantically across OpenCode, Claude Code, Cursor, VS Code, Codex, Gemini CLI, and Antigravity.",
+    "---",
+    "",
+  ].join("\n");
+
+  ensureDir(path.dirname(dstPath));
+  fs.writeFileSync(dstPath, antigravityFrontmatter + bodyWithoutFrontmatter, "utf8");
+  return { dstPath, existed };
+}
+
+function uninstallAntigravitySkill(): "done" | "not_found" {
+  const dstPath = getAntigravitySkillDst();
+  if (!fs.existsSync(dstPath)) return "not_found";
+  fs.unlinkSync(dstPath);
+  try {
+    const dir = path.dirname(dstPath);
+    if (fs.readdirSync(dir).length === 0) fs.rmdirSync(dir);
+  } catch { /* ignore */ }
+  return "done";
+}
+
+// ---------------------------------------------------------------------------
 // Formatting helpers
 // ---------------------------------------------------------------------------
 
@@ -1430,6 +1640,18 @@ function isCodexInstalled(): boolean {
 
 function isGeminiInstalled(): boolean {
   return fs.existsSync(getGeminiConfigDir());
+}
+
+/**
+ * Antigravity is present when its customization root exists, or when any of
+ * its three surfaces has left a data directory inside ~/.gemini.
+ */
+function isAntigravityInstalled(): boolean {
+  if (fs.existsSync(getAntigravityConfigDir())) return true;
+  const geminiDir = getGeminiConfigDir();
+  return ["antigravity", "antigravity-ide", "antigravity-cli"].some((surface) =>
+    fs.existsSync(path.join(geminiDir, surface)),
+  );
 }
 
 function step(label: string, fn: () => string): void {
@@ -1528,6 +1750,10 @@ function collectConfiguredExecutables(): Array<{ label: string; exec: string }> 
     nestedHookCommands((c.hooks as Record<string, unknown> | undefined)?.AfterAgent).filter((x) => x.includes("indexer-cli-gemini")),
   )) add("Gemini CLI hook", commandExecutable(command));
 
+  for (const command of jsonHookCommands(getAntigravityHooksPath(), (c) =>
+    antigravityStopHookCommands(c).filter((x) => x.includes("indexer-cli-antigravity")),
+  )) add("Antigravity hook", commandExecutable(command));
+
   try {
     const config = parseToml(fs.readFileSync(getCodexConfigPath(), "utf8")) as Record<string, unknown>;
     const notify = config.notify;
@@ -1540,6 +1766,7 @@ function collectConfiguredExecutables(): Array<{ label: string; exec: string }> 
   add("Cursor MCP server", jsonMcpCommand(getCursorMcpConfigPath(), "mcpServers"));
   add("VS Code MCP server", jsonMcpCommand(getVscodeMcpConfigPath(), "servers"));
   add("Gemini CLI MCP server", jsonMcpCommand(getGeminiSettingsPath(), "mcpServers"));
+  add("Antigravity MCP server", jsonMcpCommand(getAntigravityMcpConfigPath(), "mcpServers"));
 
   try {
     const config = parseJsonc(fs.readFileSync(getGlobalOpenCodeConfigPath(), "utf8")) as Record<string, unknown>;
@@ -1597,12 +1824,14 @@ function install(): void {
   const indexerVscodePath = getIndexerCliVscodePath();
   const indexerCodexPath = getIndexerCliCodexPath();
   const indexerGeminiPath = getIndexerCliGeminiPath();
+  const indexerAntigravityPath = getIndexerCliAntigravityPath();
   const openCodeInstalled = isOpenCodeInstalled();
   const claudeInstalled = isClaudeCodeInstalled();
   const cursorInstalled = isCursorInstalled();
   const vscodeInstalled = isVscodeInstalled();
   const codexInstalled = isCodexInstalled();
   const geminiInstalled = isGeminiInstalled();
+  const antigravityInstalled = isAntigravityInstalled();
 
   // 1. DB
   if (isPostgres) {
@@ -1728,6 +1957,22 @@ function install(): void {
     return `${existed ? "updated" : "created"} ${dstPath}`;
   });
 
+  // Antigravity 2.x — shares ~/.gemini with Gemini CLI but reads ~/.gemini/config/
+  stepIf(antigravityInstalled, "Configuring Antigravity MCP server", () => {
+    const { configPath, existed } = installAntigravityMcpConfig(mcpPath, nodePath);
+    return `${existed ? "updated" : "created"} ${configPath}`;
+  });
+
+  stepIf(antigravityInstalled, "Installing Antigravity Stop hook", () => {
+    const { hooksPath, existed } = installAntigravityHook(indexerAntigravityPath, nodePath);
+    return `${existed ? "updated" : "created"} ${hooksPath}`;
+  });
+
+  stepIf(antigravityInstalled, "Installing Antigravity skill", () => {
+    const { dstPath, existed } = installAntigravitySkill(getSkillSrc());
+    return `${existed ? "updated" : "created"} ${dstPath}`;
+  });
+
   const capturedKeys = SNAPSHOT_ENV_KEYS.filter((key) => capturedEnv[key]);
   const missingEnv = REQUIRED_ENV_KEYS.filter((key) => !capturedEnv[key]);
 
@@ -1748,12 +1993,15 @@ ${bold(isPostgres ? "Database backend:" : "Default DB path:")} ${dbPath}
 
 ${bold("Hook log:")} ${getHookLogPath()}
 
-Restart ${bold("OpenCode")}, ${bold("Claude Code")}, ${bold("Cursor")}, ${bold("VS Code")}, ${bold("Codex")}, and ${bold("Gemini CLI")} to activate.
-Desktop apps (Claude desktop, Cursor, VS Code) must be fully quit and relaunched.
+Restart ${bold("OpenCode")}, ${bold("Claude Code")}, ${bold("Cursor")}, ${bold("VS Code")}, ${bold("Codex")}, ${bold("Gemini CLI")}, and ${bold("Antigravity")} to activate.
+Desktop apps (Claude desktop, Cursor, VS Code, Antigravity) must be fully quit and relaunched.
 
 ${bold("VS Code note:")} Ensure ${bold("Chat: Use Hooks")} is enabled in VS Code settings.
 ${bold("Codex note:")} The notify hook and OPENAI_API_KEY passthrough are set in ${dim(getCodexConfigPath())}.
 ${bold("Gemini CLI note:")} The AfterAgent hook is configured in ${dim(getGeminiSettingsPath())}.
+${bold("Antigravity note:")} Antigravity shares ${dim("~/.gemini")} with Gemini CLI but reads none of its
+  files — its own config lives in ${dim(getAntigravityConfigDir())} and covers all
+  three surfaces (the 2.x app, the IDE and the CLI).
 Run ${bold("npx code-session-memory status")} to verify.
 `);
 }
@@ -1779,6 +2027,7 @@ function status(): void {
   const vscodeInstalled = isVscodeInstalled();
   const codexInstalled = isCodexInstalled();
   const geminiInstalled = isGeminiInstalled();
+  const antigravityInstalled = isAntigravityInstalled();
 
   if (openCodeInstalled) {
     console.log(bold("  OpenCode"));
@@ -1833,6 +2082,15 @@ function status(): void {
     console.log(`  ${ok(fs.existsSync(getGeminiSkillDst()))}  Skill       ${dim(getGeminiSkillDst())}`);
   } else {
     console.log(bold("\n  Gemini CLI") + dim("  (not installed — skipped)"));
+  }
+
+  if (antigravityInstalled) {
+    console.log(bold("\n  Antigravity"));
+    console.log(`  ${ok(checkAntigravityMcpConfigured())}  MCP config  ${dim(getAntigravityMcpConfigPath())}`);
+    console.log(`  ${ok(checkAntigravityHookInstalled())}  Stop hook   ${dim(getAntigravityHooksPath())}`);
+    console.log(`  ${ok(fs.existsSync(getAntigravitySkillDst()))}  Skill       ${dim(getAntigravitySkillDst())}`);
+  } else {
+    console.log(bold("\n  Antigravity") + dim("  (not installed — skipped)"));
   }
 
   console.log(bold("\n  Shared"));
@@ -1933,6 +2191,11 @@ function status(): void {
         checkGeminiMcpConfigured() &&
         checkGeminiHookInstalled() &&
         fs.existsSync(getGeminiSkillDst())
+      )) &&
+      (!antigravityInstalled || (
+        checkAntigravityMcpConfigured() &&
+        checkAntigravityHookInstalled() &&
+        fs.existsSync(getAntigravitySkillDst())
       )) &&
       fs.existsSync(mcpPath);
 
@@ -2065,6 +2328,15 @@ function uninstall(): void {
     }],
     ["Gemini CLI skill", () => {
       if (uninstallGeminiSkill() === "not_found") throw new Error("not found");
+    }],
+    ["Antigravity MCP config", () => {
+      if (uninstallAntigravityMcpConfig() === "not_found") throw new Error("not found");
+    }],
+    ["Antigravity Stop hook", () => {
+      if (uninstallAntigravityHook() === "not_found") throw new Error("not found");
+    }],
+    ["Antigravity skill", () => {
+      if (uninstallAntigravitySkill() === "not_found") throw new Error("not found");
     }],
     ["Env snapshot", () => {
       const p = getEnvFilePath();
@@ -2387,7 +2659,7 @@ ${bold("Typical flow:")}
 
 function help(): void {
   console.log(`
-${bold("code-session-memory")} — Shared vector memory for OpenCode, Claude Code, Cursor, VS Code, Codex, and Gemini CLI sessions
+${bold("code-session-memory")} — Shared vector memory for OpenCode, Claude Code, Cursor, VS Code, Codex, Gemini CLI, and Antigravity sessions
 
 ${bold("Usage:")}
   npx code-session-memory install                         Install components for detected tools
@@ -2396,7 +2668,7 @@ ${bold("Usage:")}
   npx code-session-memory reset-db                        Delete all indexed data (keeps installation)
   npx code-session-memory query <text>                    Semantic search across all indexed sessions
   npx code-session-memory query <text> --hybrid           Use hybrid search (keyword + vector)
-  npx code-session-memory query <text> --source <s>       Filter by source (opencode, claude-code, cursor, vscode, codex, gemini-cli)
+  npx code-session-memory query <text> --source <s>       Filter by source (opencode, claude-code, cursor, vscode, codex, gemini-cli, antigravity)
   npx code-session-memory query <text> --limit <n>        Max results (default: 5)
   npx code-session-memory query <text> --from <date>      Results from date (e.g. 2026-02-01)
   npx code-session-memory query <text> --to <date>        Results up to date (e.g. 2026-02-20)
@@ -2425,6 +2697,7 @@ ${bold("Environment variables:")} ${dim("(GUI-launched apps get these from the e
   VSCODE_CONFIG_DIR         Override the VS Code config directory
   CODEX_HOME                Override the Codex home directory (~/.codex)
   GEMINI_CONFIG_DIR         Override the Gemini CLI config directory (~/.gemini)
+  ANTIGRAVITY_CONFIG_DIR    Override the Antigravity customization root (~/.gemini/config)
 `);
 }
 

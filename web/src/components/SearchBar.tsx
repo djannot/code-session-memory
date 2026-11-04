@@ -1,6 +1,6 @@
 import { useState } from "react";
 
-const SOURCES = ["", "opencode", "claude-code", "cursor", "vscode", "codex", "gemini-cli"];
+const SOURCES = ["", "opencode", "claude-code", "cursor", "vscode", "codex", "gemini-cli", "antigravity"];
 const SECTION_OPTIONS = [
   { value: "", label: "All types" },
   { value: "user", label: "User" },

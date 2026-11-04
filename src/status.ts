@@ -109,6 +109,26 @@ function getGeminiSkillDst(): string {
   return path.join(getGeminiConfigDir(), "skills", "code-session-memory", "SKILL.md");
 }
 
+/**
+ * Antigravity 2.x shares ~/.gemini with Gemini CLI but reads none of its files:
+ * its global customization root is ~/.gemini/config/.
+ */
+function getAntigravityConfigDir(): string {
+  return process.env.ANTIGRAVITY_CONFIG_DIR || path.join(getGeminiConfigDir(), "config");
+}
+
+function getAntigravityMcpConfigPath(): string {
+  return path.join(getAntigravityConfigDir(), "mcp_config.json");
+}
+
+function getAntigravityHooksPath(): string {
+  return path.join(getAntigravityConfigDir(), "hooks.json");
+}
+
+function getAntigravitySkillDst(): string {
+  return path.join(getAntigravityConfigDir(), "skills", "code-session-memory", "SKILL.md");
+}
+
 function getOpenCodePluginDst(): string {
   return path.join(getOpenCodeConfigDir(), "plugins", "code-session-memory.ts");
 }
@@ -163,6 +183,14 @@ export function isVscodeInstalled(): boolean {
 
 export function isCodexInstalled(): boolean {
   return fs.existsSync(getCodexConfigDir());
+}
+
+export function isAntigravityInstalled(): boolean {
+  if (fs.existsSync(getAntigravityConfigDir())) return true;
+  const geminiDir = getGeminiConfigDir();
+  return ["antigravity", "antigravity-ide", "antigravity-cli"].some((surface) =>
+    fs.existsSync(path.join(geminiDir, surface)),
+  );
 }
 
 export function isGeminiInstalled(): boolean {
@@ -362,6 +390,36 @@ export function checkGeminiHookInstalled(): boolean {
   }
 }
 
+export function checkAntigravityMcpConfigured(): boolean {
+  try {
+    const config = JSON.parse(fs.readFileSync(getAntigravityMcpConfigPath(), "utf8")) as Record<string, unknown>;
+    return !!(
+      config.mcpServers &&
+      typeof config.mcpServers === "object" &&
+      "code-session-memory" in (config.mcpServers as object)
+    );
+  } catch {
+    return false;
+  }
+}
+
+export function checkAntigravityHookInstalled(): boolean {
+  try {
+    const hooks = JSON.parse(fs.readFileSync(getAntigravityHooksPath(), "utf8")) as Record<string, unknown>;
+    const entry = hooks["code-session-memory"];
+    if (!entry || typeof entry !== "object") return false;
+    const stop = (entry as Record<string, unknown>).Stop;
+    if (!Array.isArray(stop)) return false;
+    return stop.some((handler: unknown) => {
+      if (!handler || typeof handler !== "object") return false;
+      const command = (handler as Record<string, unknown>).command;
+      return typeof command === "string" && command.includes("indexer-cli-antigravity");
+    });
+  } catch {
+    return false;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Aggregated status
 // ---------------------------------------------------------------------------
@@ -507,6 +565,17 @@ export function getStatus(): StatusResult {
       { name: "MCP config", ok: checkGeminiMcpConfigured(), path: getGeminiSettingsPath() },
       { name: "AfterAgent hook", ok: checkGeminiHookInstalled(), path: getGeminiSettingsPath() },
       { name: "Skill", ok: fs.existsSync(getGeminiSkillDst()), path: getGeminiSkillDst() },
+    ] : [],
+  };
+
+  // Antigravity 2.x
+  const agInstalled = isAntigravityInstalled();
+  tools.antigravity = {
+    installed: agInstalled,
+    components: agInstalled ? [
+      { name: "MCP config", ok: checkAntigravityMcpConfigured(), path: getAntigravityMcpConfigPath() },
+      { name: "Stop hook", ok: checkAntigravityHookInstalled(), path: getAntigravityHooksPath() },
+      { name: "Skill", ok: fs.existsSync(getAntigravitySkillDst()), path: getAntigravitySkillDst() },
     ] : [],
   };
 

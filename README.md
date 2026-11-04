@@ -1,8 +1,8 @@
 # code-session-memory
 
-Automatic vector memory for [OpenCode](https://opencode.ai), [Claude Code](https://claude.ai/code), [Cursor](https://www.cursor.com), [VS Code](https://code.visualstudio.com), Codex, and Gemini CLI sessions — shared across all tools.
+Automatic vector memory for [OpenCode](https://opencode.ai), [Claude Code](https://claude.ai/code), [Cursor](https://www.cursor.com), [VS Code](https://code.visualstudio.com), Codex, Gemini CLI, and [Antigravity](https://antigravity.google) sessions — shared across all tools.
 
-Every time the AI agent finishes its turn, `code-session-memory` automatically indexes the new messages into a vector database. Past sessions become semantically searchable — both by the AI agent (via the MCP server) and by you. Sessions from OpenCode, Claude Code, Cursor, VS Code, Codex, and Gemini CLI are stored in the **same database**, so memory is shared across tools.
+Every time the AI agent finishes its turn, `code-session-memory` automatically indexes the new messages into a vector database. Past sessions become semantically searchable — both by the AI agent (via the MCP server) and by you. Sessions from OpenCode, Claude Code, Cursor, VS Code, Codex, Gemini CLI, and Antigravity are stored in the **same database**, so memory is shared across tools.
 
 By default, data is stored locally in a [sqlite-vec](https://github.com/asg017/sqlite-vec) database. Optionally, you can use **PostgreSQL + pgvector** (e.g. [Supabase](https://supabase.com)) as a centralized backend to share memory across multiple machines.
 
@@ -18,7 +18,7 @@ Only **new messages** are indexed on each turn — previously indexed messages a
 
 - Node.js ≥ 22 (`better-sqlite3` 13 ships prebuilt Node-API binaries, so no compiler is needed and new Node majors such as 26 work out of the box)
 - An OpenAI API key (for `text-embedding-3-large`)
-- At least one supported tool installed (OpenCode, Claude Code, Cursor, VS Code, Codex, or Gemini CLI)
+- At least one supported tool installed (OpenCode, Claude Code, Cursor, VS Code, Codex, Gemini CLI, or Antigravity)
 
 ### Install
 
@@ -59,6 +59,15 @@ The `install` command sets up everything for all detected tools on your machine:
 2. Writes the `AfterAgent` hook in `~/.gemini/settings.json` (fires after each agent turn)
 3. Copies the skill to `~/.gemini/skills/code-session-memory/SKILL.md`
 
+**Antigravity 2.x:**
+1. Writes the MCP server entry into `~/.gemini/config/mcp_config.json` under `mcpServers.code-session-memory`
+2. Writes the `Stop` lifecycle hook into `~/.gemini/config/hooks.json` (fires when the execution loop terminates)
+3. Copies the skill to `~/.gemini/config/skills/code-session-memory/SKILL.md`
+
+Antigravity shares the `~/.gemini` directory with Gemini CLI but reads none of its
+files: its global customization root is `~/.gemini/config/`. One install covers all
+three Antigravity surfaces — the 2.x app, the IDE and the CLI.
+
 **All tools share:**
 - The same database at `~/.local/share/code-session-memory/sessions.db`
 - The same MCP server for querying past sessions
@@ -66,13 +75,15 @@ The `install` command sets up everything for all detected tools on your machine:
 - An environment snapshot at `~/.config/code-session-memory/env.json` (mode `0600`)
 - A hook log at `~/.config/code-session-memory/logs/hook.log`
 
-Then **restart OpenCode / Claude Code / Cursor / VS Code / Codex / Gemini CLI** to activate.
+Then **restart OpenCode / Claude Code / Cursor / VS Code / Codex / Gemini CLI / Antigravity** to activate.
 
 > **VS Code note:** Ensure **Chat: Use Hooks** is enabled in VS Code settings (it is by default in VS Code 1.109.3+).
 >
 > **Codex note:** The install command sets `notify = ["/abs/path/to/node", ".../indexer-cli-codex.js"]` and MCP env passthrough `["OPENAI_API_KEY"]` in `~/.codex/config.toml`.
 >
 > **Gemini CLI note:** The install command sets an `AfterAgent` hook invoking `indexer-cli-gemini.js` in `~/.gemini/settings.json`.
+>
+> **Antigravity note:** The install command adds a named `code-session-memory` hook with a `Stop` handler invoking `indexer-cli-antigravity.js` in `~/.gemini/config/hooks.json`. Antigravity hooks block the agent loop, so the handler is given a 120-second timeout (the default is 30).
 
 ### Set your API key
 
@@ -126,7 +137,7 @@ leave, since hosts discard their stderr.
 
 ## Usage
 
-Once installed, memory indexing is **fully automatic**. No further action needed — sessions are indexed as you use OpenCode, Claude Code, Cursor, VS Code, Codex, or Gemini CLI.
+Once installed, memory indexing is **fully automatic**. No further action needed — sessions are indexed as you use OpenCode, Claude Code, Cursor, VS Code, Codex, Gemini CLI, or Antigravity.
 
 ### Verify installation
 
@@ -167,6 +178,11 @@ code-session-memory status
     MCP config     ~/.gemini/settings.json                              ✓
     AfterAgent     ~/.gemini/settings.json                              ✓
     Skill          ~/.gemini/skills/code-session-memory/SKILL.md        ✓
+
+  Antigravity
+    MCP config     ~/.gemini/config/mcp_config.json                     ✓
+    Stop hook      ~/.gemini/config/hooks.json                          ✓
+    Skill          ~/.gemini/config/skills/code-session-memory/SKILL.md ✓
 ```
 
 ### MCP tools
@@ -181,7 +197,7 @@ Semantic search across all indexed sessions.
 |---|---|---|---|
 | `queryText` | string | yes | Natural language query |
 | `project` | string | no | Filter by project directory path |
-| `source` | string | no | Filter by tool: `"opencode"`, `"claude-code"`, `"cursor"`, `"vscode"`, `"codex"`, or `"gemini-cli"` |
+| `source` | string | no | Filter by tool: `"opencode"`, `"claude-code"`, `"cursor"`, `"vscode"`, `"codex"`, `"gemini-cli"`, or `"antigravity"` |
 | `limit` | number | no | Max results (default: 5) |
 | `fromDate` | string | no | Return chunks indexed on or after this date (ISO 8601, e.g. `"2026-02-01"`) |
 | `toDate` | string | no | Return chunks indexed on or before this date (ISO 8601, e.g. `"2026-02-20"`) |
@@ -218,13 +234,14 @@ npx code-session-memory query "authentication middleware"
 npx code-session-memory query "auth flow" --source opencode
 npx code-session-memory query "session summary" --source codex
 npx code-session-memory query "hook payload format" --source gemini-cli
+npx code-session-memory query "customization root" --source antigravity
 npx code-session-memory query "migration" --limit 10
 npx code-session-memory query "error handling" --from 2026-02-01 --to 2026-02-20
 ```
 
 | Flag | Default | Description |
 |---|---|---|
-| `--source <s>` | none | Filter by tool: `opencode`, `claude-code`, `cursor`, `vscode`, `codex`, or `gemini-cli` |
+| `--source <s>` | none | Filter by tool: `opencode`, `claude-code`, `cursor`, `vscode`, `codex`, `gemini-cli`, or `antigravity` |
 | `--limit <n>` | 5 | Max number of results |
 | `--from <date>` | none | Only include sessions from this date (ISO 8601, e.g. `2026-02-01`) |
 | `--to <date>` | none | Only include sessions up to this date (inclusive) |
@@ -356,7 +373,8 @@ Show me how we solved the TypeScript config issue.
 | `CURSOR_CONFIG_DIR` | `~/.cursor` | Override the Cursor config directory. |
 | `VSCODE_CONFIG_DIR` | `~/.config/Code/User` (Linux) / `~/Library/Application Support/Code/User` (macOS) | Override the VS Code config directory. |
 | `CODEX_HOME` | `~/.codex` | Override the Codex home directory. |
-| `GEMINI_CONFIG_DIR` | `~/.gemini` | Override the Gemini CLI config directory. |
+| `GEMINI_CONFIG_DIR` | `~/.gemini` | Override the Gemini CLI config directory (Antigravity's surfaces live under it too). |
+| `ANTIGRAVITY_CONFIG_DIR` | `~/.gemini/config` | Override Antigravity's global customization root. |
 | `OPENAI_MODEL` | `text-embedding-3-large` | Override the embedding model. |
 | `OPENAI_SUMMARY_MODEL` | `gpt-5-nano` | Override the model used for session compaction (Compact for restart). |
 | `CSM_SUMMARY_MAX_OUTPUT_TOKENS` | `5000` | Override the max output token budget for session compaction. |
@@ -485,6 +503,7 @@ code-session-memory/
 │   ├── vscode-transcript-to-messages.ts  # VS Code JSONL transcript parser → FullMessage[]
 │   ├── codex-session-to-messages.ts       # Codex JSONL session parser → FullMessage[]
 │   ├── gemini-session-to-messages.ts      # Gemini CLI JSON session parser → FullMessage[]
+│   ├── antigravity-transcript-to-messages.ts # Antigravity JSONL transcript parser → FullMessage[]
 │   ├── opencode-db-to-messages.ts        # OpenCode internal DB reader (fallback for -s mode)
 │   ├── indexer.ts                        # Orchestrator: incremental indexing
 │   ├── indexer-cli.ts                    # Node.js subprocess (called by OpenCode plugin)
@@ -493,6 +512,7 @@ code-session-memory/
 │   ├── indexer-cli-vscode.ts            # Node.js subprocess (called by VS Code Stop hook)
 │   ├── indexer-cli-codex.ts              # Node.js subprocess (called by Codex notify hook)
 │   ├── indexer-cli-gemini.ts             # Node.js subprocess (called by Gemini CLI AfterAgent hook)
+│   ├── indexer-cli-antigravity.ts        # Node.js subprocess (called by the Antigravity Stop hook)
 │   ├── cli.ts                            # install / status / uninstall / reset-db / query / web commands
 │   ├── cli-query.ts                      # query command: semantic search from the terminal
 │   ├── cli-sessions.ts                   # sessions list / print / delete / purge (TUI)
@@ -529,6 +549,7 @@ code-session-memory/
     ├── vscode-transcript-to-messages.test.ts # Unit tests: VS Code JSONL parser
     ├── codex-session-to-messages.test.ts    # Unit tests: Codex JSONL parser
     ├── gemini-session-to-messages.test.ts   # Unit tests + e2e indexing: Gemini CLI parser
+    ├── antigravity-transcript-to-messages.test.ts # Unit tests + e2e indexing: Antigravity parser
     ├── opencode-db-to-messages.test.ts      # Unit tests: OpenCode internal DB reader
     ├── cli-query.test.ts                    # Unit tests: query CLI command
     ├── e2e-claude.test.ts                   # End-to-end: Claude Code pipeline
@@ -584,12 +605,13 @@ Tests use [Vitest](https://vitest.dev) and run without any external dependencies
  ✓ tests/vscode-transcript-to-messages.test.ts     (7 tests)
  ✓ tests/codex-session-to-messages.test.ts        (14 tests)
  ✓ tests/gemini-session-to-messages.test.ts         (5 tests)
+ ✓ tests/antigravity-transcript-to-messages.test.ts (13 tests)
  ✓ tests/opencode-db-to-messages.test.ts           (8 tests)
  ✓ tests/cli-query.test.ts                        (23 tests)
  ✓ tests/e2e-claude.test.ts                       (18 tests)
  ✓ tests/e2e-cursor.test.ts                        (8 tests)
  ✓ tests/e2e-opencode.test.ts                     (14 tests)
-   Tests  270 passed
+   Tests  336 passed
 ```
 
 To refresh the e2e fixtures (e.g. after changing the indexer or parsers), run:
@@ -604,7 +626,7 @@ This invokes the real `claude` and `opencode` CLIs to generate two-turn sessions
 npx code-session-memory uninstall
 ```
 
-This removes the plugin, hooks, skill files, and MCP config entries for all tools (OpenCode, Claude Code, Cursor, VS Code, Codex, and Gemini CLI). The database is **not** removed automatically.
+This removes the plugin, hooks, skill files, and MCP config entries for all tools (OpenCode, Claude Code, Cursor, VS Code, Codex, Gemini CLI, and Antigravity). The database is **not** removed automatically.
 
 To delete individual sessions instead of wiping everything, use the [session browser](#browsing-sessions):
 ```bash
@@ -677,6 +699,21 @@ Codex stores session transcripts as JSONL under `~/.codex/sessions/YYYY/MM/DD/ro
 
 Gemini CLI provides `transcript_path` and `session_id` in the `AfterAgent` hook payload. The parser (`gemini-session-to-messages.ts`) reads the JSON session file, keeps `user` and `gemini` messages, maps `toolCalls[]` to `tool-invocation` parts, and derives a title from the first user prompt.
 
+### Antigravity session parsing
+
+Antigravity encodes hook payloads with protojson, so every key is camelCase: `conversationId`, `workspacePaths[]`, `transcriptPath`, `modelName`, `terminationReason`. The transcript is JSONL, one object per trajectory step, and lives at `~/.gemini/<surface>/brain/<conversationId>/.system_generated/logs/transcript.jsonl` — the parser falls back to that path when the payload omits `transcriptPath`.
+
+The parser (`antigravity-transcript-to-messages.ts`):
+
+- Keeps `USER_INPUT` steps, unwrapping the `<USER_REQUEST>` tag so the appended `<ADDITIONAL_METADATA>` and `<USER_SETTINGS_CHANGE>` blocks the user never typed are not indexed.
+- Keeps `PLANNER_RESPONSE` steps as assistant messages, skipping the `thinking` field (internal reasoning, same as the Claude Code parser).
+- Merges the `GENERIC` steps that follow a `PLANNER_RESPONSE` back into its `tool-invocation` parts — a step emitting N tool calls is followed by N result steps, in order — so each tool call is one message with both Input and Output.
+- Marks a result carrying `error` as an error state, so failed tool calls are counted in analytics. Antigravity is the only source that reports this explicitly.
+- Records `input_tokens` / `cache_read_tokens` / `output_tokens` per step. The two input figures are disjoint in Antigravity, so they map onto `MessageTokens` without subtraction. The model comes from the payload's `modelName`, not the transcript, so a re-index from the web UI cannot recover it.
+- Drops `SYSTEM_MESSAGE` steps (platform noise).
+
+Unlike the other hosts, Antigravity reads the hook's stdout: a `decision` of `"continue"` would push the agent back into its loop, so the indexer always emits a non-continue decision.
+
 ### Chunking strategy
 
 - Heading-aware splitting — headings define semantic boundaries
@@ -740,7 +777,7 @@ The schema upgrade itself is automatic on both backends: the new columns are add
 
 ### MCP server
 
-The MCP server uses **stdio transport** — the simplest and most reliable transport for local use. It opens and closes the SQLite connection on each query (no persistent connection), making it safe to run alongside the indexer. The `query_sessions` tool supports filtering by `source` (`opencode`, `claude-code`, `cursor`, `vscode`, `codex`, `gemini-cli`), `project`, and date range (`fromDate`/`toDate`).
+The MCP server uses **stdio transport** — the simplest and most reliable transport for local use. It opens and closes the SQLite connection on each query (no persistent connection), making it safe to run alongside the indexer. The `query_sessions` tool supports filtering by `source` (`opencode`, `claude-code`, `cursor`, `vscode`, `codex`, `gemini-cli`, `antigravity`), `project`, and date range (`fromDate`/`toDate`).
 
 ## License
 

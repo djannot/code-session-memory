@@ -14,6 +14,7 @@ const toolDisplayNames: Record<string, string> = {
   vscode: "VS Code",
   codex: "Codex",
   "gemini-cli": "Gemini CLI",
+  antigravity: "Antigravity",
 };
 
 export default function StatusDashboard({ status }: { status: StatusResult }) {
